@@ -1,0 +1,20 @@
+# build output
+bin/
+obj/
+dist/
+artifacts/
+
+# IDE / user files
+.vs/
+.idea/
+*.user
+*.suo
+
+# test and coverage output
+TestResults/
+coverage/
+
+# never commit credentials or local app data
+*.dat
+credential*
+config.json
