@@ -1590,21 +1590,23 @@ remain unchanged.
 
 ปัญหาที่พบจากผู้ใช้: token ของ Claude Code หมดอายุทุกครั้งที่เปิดคอมใหม่ ต้องเปิด PowerShell แล้วพิมพ์ `claude` เองทุกครั้งเพื่อให้ Claude Code ต่ออายุ token (ซึ่งจะเจอหน้าจอ "Quick safety check: Is this a project you created or one you trust?" ของ workspace trust ก่อนเข้าสู่ REPL)
 
-**สิ่งที่เพิ่ม:** เมื่อ error เป็น `CredentialUnavailable` (token หมด/reject) แอปจะเปิด `claude` ในหน้าต่างเทอร์มินัลเองให้อัตโนมัติ เหมือนผู้ใช้เปิดเองทุกประการ — ไม่ได้ทำอะไรแทนผู้ใช้เกินกว่านั้น ยังต้องตอบ prompt trust folder เอง
+**สิ่งที่เพิ่ม:** เมื่อ error เป็น `CredentialUnavailable` (token หมด/reject) แอปจะรัน `claude update` ในพื้นหลังให้อัตโนมัติ
+
+> **แก้ไขระหว่างพัฒนา (v12):** เวอร์ชันแรกเปิด `claude` เฉยๆ ซึ่งเข้าสู่โหมดแชทแบบ interactive ที่**ไม่ปิดตัวเองเลย** ผู้ใช้ต้องปิดหน้าต่างเองอยู่ดี ขัดกับจุดประสงค์ "อัตโนมัติ" — เปลี่ยนมาใช้ `claude update` แทนสำหรับเส้นทางอัตโนมัติ เพราะเป็น subcommand เพื่อบำรุงรักษาที่ต่ออายุ token แล้วจบการทำงานเอง หน้าต่างจึงปิดตัวเองโดยไม่ต้องให้ผู้ใช้ทำอะไร (อ้างอิงจากข้อมูลชุมชนว่า `claude update` กระตุ้น token refresh ยังไม่ได้ยืนยันจากเอกสารทางการ)
 
 | | พฤติกรรม |
 |---|---|
 | **เงื่อนไขเปิด** | `ClaudeCodeRecoveryPolicy.ShouldAutoLaunch` (pure function): โหมด `ClaudeCodeOAuth` เท่านั้น, error เป็น `CredentialUnavailable`, ตั้งค่าเปิดไว้ (ค่าเริ่มต้น: เปิด), ยังไม่เคยลองเปิดสำหรับรอบปัญหานี้, ไม่มีหน้าต่างเดิมค้างอยู่ |
-| **วิธีเปิด** | `ClaudeCodeLauncher.Launch()` เรียก `Process.Start("claude")` แบบ `UseShellExecute = true` (เปิดหน้าต่าง console จริง เหมือนพิมพ์เองใน PowerShell) working directory = โฟลเดอร์ผู้ใช้ (`%USERPROFILE%`) |
-| **ไม่เปิดซ้ำ** | เปิดได้ครั้งเดียวต่อรอบปัญหา (reset เมื่อเชื่อมต่อสำเร็จอีกครั้ง) และเช็ค `IsRunning` ก่อนเปิดเสมอ ไม่มีวันเปิดสองหน้าต่างซ้อนกัน |
-| **หลังเปิด** | รอ 8 วินาที (`ClaudeCodeLaunchRecheckDelay`) แล้วสั่ง refresh ทันที แทนที่จะรอ backoff ปกติ (สูงสุด 120 วิ) เพราะ token น่าจะต่ออายุเสร็จตั้งแต่ CLI เริ่มทำงาน ไม่ต้องรอจนกว่าผู้ใช้จะปิดหน้าต่าง REPL (ซึ่งอาจไม่ปิดเลยจนกว่าจะเลิกแชท) |
-| **แจ้งเตือน** | เปิดอัตโนมัติ → balloon แจ้งว่ากำลังเปิด Claude Code ให้ตอบ prompt trust folder เอง / เปิดล้มเหลว (ไม่เจอ `claude` ใน PATH) → log อย่างเดียวไม่ balloon ซ้ำทุกรอบ retry |
-| **เปิดเอง** | เมนู tray → **"Sign in to Claude Code..."** (แสดงเฉพาะโหมด OAuth) เปิดล้มเหลวตอนกดเองจะขึ้น MessageBox บอกเหตุผล (เช่น หา `claude` ไม่เจอ ให้ตรวจว่าติดตั้ง Claude Code CLI และอยู่ใน PATH) |
-| **ตั้งค่า** | Settings → checkbox "When Claude Code's login expires, automatically open it..." (แสดงเฉพาะโหมด OAuth ค่าเริ่มต้นเปิด) |
+| **เส้นทางอัตโนมัติ** | `ClaudeCodeLauncher(arguments: "update")` เรียก `Process.Start("claude update")` แบบ `UseShellExecute = true` working directory = `%USERPROFILE%` — จบเองแล้วหน้าต่างปิดเอง ไม่ต้องกดอะไร (สมมติว่าไม่ต้องผ่าน workspace-trust prompt เพราะไม่ใช่คำสั่งที่เข้าถึงไฟล์ในโฟลเดอร์) |
+| **เส้นทางกดเอง** | เมนู tray → **"Sign in to Claude Code..."** เปิด `claude` แบบ interactive เต็มรูปแบบ (คนละ instance ของ launcher จากเส้นทางอัตโนมัติ ไม่บล็อกกัน) ไว้ใช้กรณี refresh token หมดอายุจริงจนต้องล็อกอินใหม่ทั้งหมด ซึ่ง `claude update` แก้ไม่ได้ |
+| **ไม่เปิดซ้ำ** | แต่ละ launcher เช็ค `IsRunning` ก่อนเปิดเสมอ ไม่มีวันเปิดหน้าต่างซ้อนจากเส้นทางเดียวกัน เส้นทางอัตโนมัติเปิดได้ครั้งเดียวต่อรอบปัญหา (reset เมื่อเชื่อมต่อสำเร็จอีกครั้ง) |
+| **หลังเปิด** | รอ 8 วินาที (`ClaudeCodeLaunchRecheckDelay`) แล้วสั่ง refresh ทันที แทนที่จะรอ backoff ปกติ (สูงสุด 120 วิ) |
+| **แจ้งเตือน** | เปิดอัตโนมัติสำเร็จ → balloon แจ้งว่ากำลัง refresh อยู่เบื้องหลัง พร้อมบอกทางเลือกกดเองถ้าไม่หาย / เปิดล้มเหลว (ไม่เจอ `claude` ใน PATH) → log อย่างเดียวไม่ balloon ซ้ำทุกรอบ retry / กดเองแล้วล้มเหลว → MessageBox บอกเหตุผล |
+| **ตั้งค่า** | Settings → checkbox "run \"claude update\" in the background..." (แสดงเฉพาะโหมด OAuth ค่าเริ่มต้นเปิด) |
 
 `config.json` เพิ่ม `autoLaunchClaudeCode` (bool, default `true`) ไฟล์เก่าที่ไม่มีคีย์นี้โหลดได้ปกติและได้ค่า default
 
-**ข้อจำกัดที่ยังไม่แก้ในรอบนี้:** ยังไม่ยืนยันว่า token refresh เกิดขึ้นจริงภายใน 8 วินาทีแรกของการเปิด CLI (อ้างอิงจากพฤติกรรมทั่วไปของ OAuth CLI ที่ต่ออายุ token ตอนเริ่มทำงาน ไม่ใช่เอกสารที่ยืนยันแล้ว) ถ้า refresh ยังไม่เสร็จภายใน 8 วิ ระบบ backoff ปกติจะรับช่วงลองต่อเองอยู่ดี ไม่กระทบการทำงานเพื่อยืนยันว่า GDI handle ไม่รั่ว ภาพ popup ทั้งโหมดสว่าง/มืดตรวจด้วยตาจากการเรนเดอร์เป็นไฟล์ แต่ยังไม่ได้ทดสอบบนจอ DPI สูงหรือหลายจอจริง
+**ข้อจำกัดที่ยังไม่แก้ในรอบนี้:** ยังไม่ได้ยืนยันด้วยเอกสารทางการว่า `claude update` กระตุ้น token refresh จริงและไม่ต้องผ่าน workspace-trust prompt (อ้างอิงจากข้อมูลชุมชนเท่านั้น) ถ้าพฤติกรรมจริงต่างจากนี้ (เช่นยังเจอ prompt ค้าง) ผู้ใช้ยังใช้เมนู "Sign in to Claude Code..." แบบ interactive เป็นทางเลือกสำรองได้เสมอเพื่อยืนยันว่า GDI handle ไม่รั่ว ภาพ popup ทั้งโหมดสว่าง/มืดตรวจด้วยตาจากการเรนเดอร์เป็นไฟล์ แต่ยังไม่ได้ทดสอบบนจอ DPI สูงหรือหลายจอจริง
 
 - รันโหมดทดสอบ UI โดยไม่ต้องมี credential: `ClaudeUsageTray.exe --mock` (วนค่า 63/72/88/96/25 ทุกรอบ refresh)
 - `startWithWindows` ค่าเริ่มต้นเป็น `false` (ผู้ใช้เปิดเองใน Settings) เพื่อไม่สร้าง shortcut โดยที่ยังไม่ได้ขออนุญาต

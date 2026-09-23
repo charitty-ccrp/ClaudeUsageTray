@@ -5,10 +5,13 @@ namespace ClaudeUsageTray.Services;
 
 /// <summary>
 /// Opens the Claude Code CLI in a normal, visible console window - the same thing the user would do by hand
-/// (open a terminal, run "claude"). We never automate past that: the CLI's own folder-trust and sign-in prompts,
-/// if any, are answered by the user. Launching it is enough for Claude Code to refresh its own token on startup.
+/// (open a terminal, run a "claude" command). We never automate past that: any prompt the CLI shows is answered
+/// by the user. TrayApplicationContext uses two of these: one running "claude update" for the automatic, silent
+/// recovery path (a maintenance subcommand that refreshes the token and then exits on its own, so the window
+/// closes itself), and one running plain "claude" for the manual "Sign in..." menu item, which opens the full
+/// interactive session in case the refresh token itself is gone and the user needs to log in again.
 /// </summary>
-public sealed class ClaudeCodeLauncher(string command = "claude", string? workingDirectory = null, string? arguments = null) : IDisposable
+public sealed class ClaudeCodeLauncher(string command = "claude", string? arguments = null, string? workingDirectory = null) : IDisposable
 {
     private readonly string _workingDirectory = workingDirectory ??
         Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
@@ -48,7 +51,6 @@ public sealed class ClaudeCodeLauncher(string command = "claude", string? workin
                 UseShellExecute = true, // opens a real console window, exactly like the user typing the command themselves
                 WorkingDirectory = _workingDirectory,
             };
-            // production always launches "claude" with no arguments; this only exists so tests can use a short-lived command
             if (!string.IsNullOrEmpty(arguments)) info.Arguments = arguments;
             var process = Process.Start(info);
             if (process is null) return (false, "Could not start Claude Code.");

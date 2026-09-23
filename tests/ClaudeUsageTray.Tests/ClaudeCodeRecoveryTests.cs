@@ -85,9 +85,8 @@ public class ClaudeCodeLauncherTests
     [Fact]
     public void Starts_a_process_reports_it_as_running_and_never_starts_a_second_one_until_it_exits()
     {
-        // "ping" against localhost runs for a short, predictable time and always exists on Windows, so this needs
-        // no fixture on disk; the `arguments` constructor parameter exists for tests only - real launches pass none.
-        using var launcher = new ClaudeCodeLauncher("ping.exe", Path.GetTempPath(), "-n 3 127.0.0.1");
+        // "ping" against localhost runs for a short, predictable time and always exists on Windows, so this needs no fixture on disk.
+        using var launcher = new ClaudeCodeLauncher("ping.exe", arguments: "-n 3 127.0.0.1", workingDirectory: Path.GetTempPath());
 
         var (started, error) = launcher.Launch();
         Assert.True(started);

@@ -38,7 +38,8 @@ internal sealed class SettingsForm : Form
     {
         AutoSize = true,
         MaximumSize = new Size(360, 0),
-        Text = "When Claude Code's login expires, automatically open it in a terminal so it can refresh itself",
+        Text = "When Claude Code's login expires, run \"claude update\" in the background to refresh it " +
+               "(the window closes itself when done)",
     };
 
     public SettingsForm(AppConfig config, bool startupEnabled, int? credentialAgeDays,

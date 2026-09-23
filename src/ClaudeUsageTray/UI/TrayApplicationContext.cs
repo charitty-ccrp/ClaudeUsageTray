@@ -37,7 +37,11 @@ internal sealed class TrayApplicationContext : ApplicationContext
     private readonly ToolStripMenuItem _overlayResetItem = new("Reset position");
 
     // Claude Code OAuth mode: auto-open the CLI when the login has expired, so the user does not have to do it by hand.
-    private readonly ClaudeCodeLauncher _claudeCodeLauncher = new();
+    // "claude update" is a maintenance subcommand that refreshes the token and exits by itself (the window closes on
+    // its own); plain "claude" opens the full interactive session, used only for the manual "Sign in..." menu item,
+    // in case the refresh token itself is gone and a real login is needed.
+    private readonly ClaudeCodeLauncher _claudeCodeAutoLauncher = new(arguments: "update");
+    private readonly ClaudeCodeLauncher _claudeCodeSignInLauncher = new();
     private readonly ToolStripMenuItem _signInItem = new("Sign in to Claude Code...") { Visible = false };
     private readonly System.Windows.Forms.Timer _launchRecheckTimer = new() { Interval = (int)AppConstants.ClaudeCodeLaunchRecheckDelay.TotalMilliseconds };
     private bool _claudeCodeLaunchAttempted;
@@ -89,7 +93,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
         _overlayResetItem.Click += (_, _) => UpdateOverlayConfig(c => { c.OverlayX = null; c.OverlayY = null; }, replace: true);
         SyncOverlayMenu();
 
-        _signInItem.Click += (_, _) => LaunchClaudeCode(auto: false);
+        _signInItem.Click += (_, _) => SignInToClaudeCode();
         _menu.Items.Add(_signInItem);
         SyncSignInMenuItem();
 
@@ -146,29 +150,35 @@ internal sealed class TrayApplicationContext : ApplicationContext
             return;
         }
         if (!ClaudeCodeRecoveryPolicy.ShouldAutoLaunch(_config.AuthMode, state.Error, _config.AutoLaunchClaudeCode,
-                _claudeCodeLaunchAttempted, _claudeCodeLauncher.IsRunning))
+                _claudeCodeLaunchAttempted, _claudeCodeAutoLauncher.IsRunning))
             return;
 
         _claudeCodeLaunchAttempted = true;
-        LaunchClaudeCode(auto: true);
-    }
-
-    private void LaunchClaudeCode(bool auto)
-    {
-        var (started, error) = _claudeCodeLauncher.Launch();
+        var (started, error) = _claudeCodeAutoLauncher.Launch();
         if (started)
         {
-            Logger.Info("Launched Claude Code so it can refresh its login.");
+            Logger.Info("Ran 'claude update' so Claude Code can refresh its login; the window closes itself when done.");
             _launchRecheckTimer.Stop();
             _launchRecheckTimer.Start(); // give the CLI a few seconds to refresh the token, then try again sooner than backoff would
-            if (auto)
-                _notifyIcon.ShowBalloonTip(10_000, "Claude Code sign-in needed",
-                    "Opening Claude Code so it can refresh its login. Approve the folder-trust prompt if one appears.",
-                    ToolTipIcon.Info);
+            _notifyIcon.ShowBalloonTip(10_000, "Claude Code sign-in needed",
+                "Refreshing Claude Code's login in the background. If it does not reconnect, use \"Sign in to Claude Code...\" " +
+                "from the tray menu.", ToolTipIcon.Info);
         }
-        else if (auto)
+        else
         {
             Logger.Warn($"Could not auto-launch Claude Code: {error}"); // avoid spamming a balloon on every retry
+        }
+    }
+
+    /// <summary>Manual fallback: a full interactive session, in case "claude update" alone cannot fix it (e.g. logged out).</summary>
+    private void SignInToClaudeCode()
+    {
+        var (started, error) = _claudeCodeSignInLauncher.Launch();
+        if (started)
+        {
+            Logger.Info("Opened an interactive Claude Code session for the user to sign in.");
+            _launchRecheckTimer.Stop();
+            _launchRecheckTimer.Start();
         }
         else
         {
@@ -528,7 +538,9 @@ internal sealed class TrayApplicationContext : ApplicationContext
         _timer.Dispose();
         _launchRecheckTimer.Stop();
         _launchRecheckTimer.Dispose();
-        _claudeCodeLauncher.Dispose(); // does not close the CLI window itself, only stops tracking the process handle
+        // disposing only stops tracking the process handle; it does not close a CLI window the user is still using
+        _claudeCodeAutoLauncher.Dispose();
+        _claudeCodeSignInLauncher.Dispose();
         _service.StateChanged -= OnStateChanged;
         _service.RefreshingChanged -= OnRefreshingChanged;
         _service.Dispose();
