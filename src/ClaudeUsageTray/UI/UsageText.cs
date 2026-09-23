@@ -34,7 +34,7 @@ internal static class UsageText
         UsageErrorKind.Server => "Service temporarily unavailable.",
         UsageErrorKind.InvalidResponse => "Unexpected response format. The Claude usage endpoint may have changed.",
         UsageErrorKind.Network => "Network unavailable.",
-        UsageErrorKind.CredentialUnavailable => "Claude Code login is missing or expired. Use Claude Code once so it refreshes its token; retrying automatically.",
+        UsageErrorKind.CredentialUnavailable => "Claude Code login is missing or expired. This app can open Claude Code for you (see Settings); approve its sign-in prompt and it will reconnect automatically.",
         _ => string.Empty,
     };
 

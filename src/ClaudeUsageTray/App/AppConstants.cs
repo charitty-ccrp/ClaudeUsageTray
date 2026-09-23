@@ -17,4 +17,8 @@ internal static class AppConstants
     public static readonly TimeSpan MaxPlausibleReset = TimeSpan.FromHours(5) + TimeSpan.FromMinutes(10);
 
     public static readonly TimeSpan HttpTimeout = TimeSpan.FromSeconds(15);
+
+    /// <summary>How long to wait after auto-launching Claude Code before trying a refresh, so the earlier BackoffPolicy
+    /// delay (up to 120s) does not make the user wait after they have already approved the sign-in prompt.</summary>
+    public static readonly TimeSpan ClaudeCodeLaunchRecheckDelay = TimeSpan.FromSeconds(8);
 }

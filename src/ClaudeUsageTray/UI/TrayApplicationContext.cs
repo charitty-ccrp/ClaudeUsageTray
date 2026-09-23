@@ -36,6 +36,12 @@ internal sealed class TrayApplicationContext : ApplicationContext
     private readonly ToolStripMenuItem _overlayLockItem = new("Lock position (click-through)") { CheckOnClick = false };
     private readonly ToolStripMenuItem _overlayResetItem = new("Reset position");
 
+    // Claude Code OAuth mode: auto-open the CLI when the login has expired, so the user does not have to do it by hand.
+    private readonly ClaudeCodeLauncher _claudeCodeLauncher = new();
+    private readonly ToolStripMenuItem _signInItem = new("Sign in to Claude Code...") { Visible = false };
+    private readonly System.Windows.Forms.Timer _launchRecheckTimer = new() { Interval = (int)AppConstants.ClaudeCodeLaunchRecheckDelay.TotalMilliseconds };
+    private bool _claudeCodeLaunchAttempted;
+
     private AppConfig _config;
     private string? _sessionKey;
     private UsageState _state = UsageState.Initial;
@@ -83,9 +89,15 @@ internal sealed class TrayApplicationContext : ApplicationContext
         _overlayResetItem.Click += (_, _) => UpdateOverlayConfig(c => { c.OverlayX = null; c.OverlayY = null; }, replace: true);
         SyncOverlayMenu();
 
+        _signInItem.Click += (_, _) => LaunchClaudeCode(auto: false);
+        _menu.Items.Add(_signInItem);
+        SyncSignInMenuItem();
+
         _menu.Items.Add("Settings", null, (_, _) => ShowSettings());
         _menu.Items.Add("Open Claude", null, (_, _) => OpenClaude());
         _menu.Items.Add("Exit", null, (_, _) => ExitApp());
+
+        _launchRecheckTimer.Tick += (_, _) => { _launchRecheckTimer.Stop(); _service.RequestRefresh(); };
 
         _popup.RefreshClicked += (_, _) => _service.RequestRefresh();
         _popup.SettingsClicked += (_, _) => ShowSettings();
@@ -122,7 +134,49 @@ internal sealed class TrayApplicationContext : ApplicationContext
         _state = state;
         Notify(state);
         RefreshUi();
+        MaybeAutoLaunchClaudeCode(state);
     }
+
+    /// <summary>Opens the Claude Code CLI once per failure episode when its login has expired; never more than one window.</summary>
+    private void MaybeAutoLaunchClaudeCode(UsageState state)
+    {
+        if (state.Error == UsageErrorKind.None)
+        {
+            _claudeCodeLaunchAttempted = false;
+            return;
+        }
+        if (!ClaudeCodeRecoveryPolicy.ShouldAutoLaunch(_config.AuthMode, state.Error, _config.AutoLaunchClaudeCode,
+                _claudeCodeLaunchAttempted, _claudeCodeLauncher.IsRunning))
+            return;
+
+        _claudeCodeLaunchAttempted = true;
+        LaunchClaudeCode(auto: true);
+    }
+
+    private void LaunchClaudeCode(bool auto)
+    {
+        var (started, error) = _claudeCodeLauncher.Launch();
+        if (started)
+        {
+            Logger.Info("Launched Claude Code so it can refresh its login.");
+            _launchRecheckTimer.Stop();
+            _launchRecheckTimer.Start(); // give the CLI a few seconds to refresh the token, then try again sooner than backoff would
+            if (auto)
+                _notifyIcon.ShowBalloonTip(10_000, "Claude Code sign-in needed",
+                    "Opening Claude Code so it can refresh its login. Approve the folder-trust prompt if one appears.",
+                    ToolTipIcon.Info);
+        }
+        else if (auto)
+        {
+            Logger.Warn($"Could not auto-launch Claude Code: {error}"); // avoid spamming a balloon on every retry
+        }
+        else
+        {
+            MessageBox.Show(error, "Claude Usage", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        }
+    }
+
+    private void SyncSignInMenuItem() => _signInItem.Visible = !_mock && _config.AuthMode == AuthMode.ClaudeCodeOAuth;
 
     private void OnRefreshingChanged(bool refreshing) => RefreshUi();
 
@@ -330,6 +384,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
             removeCredential: RemoveCredential,
             credentialAvailable: _sessionKey is not null,
             mode: _config.AuthMode,
+            autoLaunchClaudeCode: _config.AutoLaunchClaudeCode,
             previewOverlayOpacity: percent => { if (_overlay is { } overlay) Guard("opacity", () => overlay.OpacityPercent = percent); },
             resetOverlayPosition: () => UpdateOverlayConfig(c => { c.OverlayX = null; c.OverlayY = null; }, replace: true));
         _openDialog = form;
@@ -344,6 +399,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
             _config.RefreshIntervalSeconds = form.RefreshIntervalSeconds;
             _config.StartWithWindows = form.StartWithWindows;
             _config.NotificationsEnabled = form.NotificationsEnabled;
+            _config.AutoLaunchClaudeCode = form.AutoLaunchClaudeCode;
             _config.OverlayEnabled = form.OverlayEnabled;
             _config.OverlayCompact = form.OverlayCompact;
             _config.OverlayLocked = form.OverlayLocked;
@@ -382,6 +438,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
 
             _config = _configStore.Load();
             _sessionKey = _credentialStore.Load();
+            SyncSignInMenuItem();
             _service.RequestRefresh();
             return true;
         }
@@ -469,6 +526,9 @@ internal sealed class TrayApplicationContext : ApplicationContext
         _overlay = null;
         _timer.Stop();
         _timer.Dispose();
+        _launchRecheckTimer.Stop();
+        _launchRecheckTimer.Dispose();
+        _claudeCodeLauncher.Dispose(); // does not close the CLI window itself, only stops tracking the process handle
         _service.StateChanged -= OnStateChanged;
         _service.RefreshingChanged -= OnRefreshingChanged;
         _service.Dispose();

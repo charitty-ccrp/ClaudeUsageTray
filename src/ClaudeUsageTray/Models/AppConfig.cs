@@ -26,6 +26,10 @@ public sealed class AppConfig
     [JsonPropertyName("notificationsEnabled")]
     public bool NotificationsEnabled { get; set; } = true;
 
+    /// <summary>Claude Code OAuth mode only: open the Claude Code CLI automatically when its login has expired.</summary>
+    [JsonPropertyName("autoLaunchClaudeCode")]
+    public bool AutoLaunchClaudeCode { get; set; } = true;
+
     [JsonPropertyName("disclaimerAccepted")]
     public bool DisclaimerAccepted { get; set; }
 

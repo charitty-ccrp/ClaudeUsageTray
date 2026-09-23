@@ -34,9 +34,16 @@ internal sealed class SettingsForm : Form
         Text = "Lock position (click-through). While locked, unlock it from the tray icon's Overlay menu.",
     };
 
+    private readonly CheckBox _autoLaunchClaudeCode = new()
+    {
+        AutoSize = true,
+        MaximumSize = new Size(360, 0),
+        Text = "When Claude Code's login expires, automatically open it in a terminal so it can refresh itself",
+    };
+
     public SettingsForm(AppConfig config, bool startupEnabled, int? credentialAgeDays,
         Func<bool> updateCredential, Action removeCredential, bool credentialAvailable, AuthMode mode,
-        Action<int> previewOverlayOpacity, Action resetOverlayPosition)
+        bool autoLaunchClaudeCode, Action<int> previewOverlayOpacity, Action resetOverlayPosition)
     {
         Text = "Claude Usage - Settings";
         FormBorderStyle = FormBorderStyle.FixedDialog;
@@ -44,7 +51,9 @@ internal sealed class SettingsForm : Form
         MinimizeBox = false;
         StartPosition = FormStartPosition.CenterScreen;
         AutoScaleMode = AutoScaleMode.Dpi;
-        ClientSize = new Size(420, 640);
+        ClientSize = new Size(420, mode == AuthMode.ClaudeCodeOAuth ? 680 : 640);
+
+        _autoLaunchClaudeCode.Checked = autoLaunchClaudeCode;
 
         _overlayOn.Checked = config.OverlayEnabled;
         _overlayCompact.Checked = config.OverlayCompact;
@@ -125,6 +134,12 @@ internal sealed class SettingsForm : Form
                     : "Source: claude.ai cookie, saved";
         panel.Controls.Add(new Label { AutoSize = true, MaximumSize = new Size(360, 0), Text = credentialText, Margin = new Padding(3, 14, 3, 3) });
 
+        if (mode == AuthMode.ClaudeCodeOAuth)
+        {
+            _autoLaunchClaudeCode.Margin = new Padding(3, 6, 3, 3);
+            panel.Controls.Add(_autoLaunchClaudeCode);
+        }
+
         var credentialButtons = new FlowLayoutPanel { AutoSize = true, WrapContents = false };
         var update = new Button { Text = "Change source...", Width = 150, Height = 28 };
         var remove = new Button { Text = "Remove saved cookie", Width = 150, Height = 28, Enabled = credentialAvailable };
@@ -171,4 +186,5 @@ internal sealed class SettingsForm : Form
     public bool OverlayCompact => _overlayCompact.Checked;
     public bool OverlayLocked => _overlayLocked.Checked;
     public int OverlayOpacity => _overlayOpacity.Value;
+    public bool AutoLaunchClaudeCode => _autoLaunchClaudeCode.Checked;
 }
