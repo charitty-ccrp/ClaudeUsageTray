@@ -6,18 +6,23 @@ namespace ClaudeUsageTray.UI;
 
 /// <summary>
 /// First-run / change-source dialog. Two sources: Claude Code OAuth (reads Claude Code's own login, stores nothing)
-/// or a pasted claude.ai sessionKey (stored encrypted, never shown again).
+/// or a pasted claude.ai sessionKey (stored encrypted, never shown again). When a Claude Code login is found the
+/// dialog preselects it and tests it straight away, so setup is one click; the cookie route sits under "Advanced".
 /// </summary>
 internal sealed class SetupForm : Form
 {
+    private const int ContentWidth = 440;
+
+    private const string ShortAck = "I understand this uses an unofficial Claude endpoint and I use it at my own risk.";
+
     private const string CookieAck =
-        "I understand this uses an undocumented claude.ai endpoint with my session cookie, which may " +
-        "conflict with Anthropic's Terms of Service or my organization's policy, and I use it at my own risk.";
+        "This uses an undocumented claude.ai endpoint with your session cookie, which may conflict with Anthropic's " +
+        "Terms of Service or your organization's policy. The cookie is stored encrypted for your Windows account only.";
 
     private const string OAuthAck =
-        "I understand this reads my Claude Code OAuth token (read-only, from ~/.claude/.credentials.json) and calls an " +
-        "undocumented api.anthropic.com endpoint. Anthropic's terms may restrict using subscription OAuth tokens in " +
-        "other tools or my organization's policy may forbid it, and I use it at my own risk.";
+        "This reads your Claude Code OAuth token (read-only, from ~/.claude/.credentials.json) and calls an undocumented " +
+        "api.anthropic.com endpoint. Anthropic's terms may restrict using subscription OAuth tokens in other tools, or " +
+        "your organization's policy may forbid it. The token is never copied, stored, logged or refreshed by this app.";
 
     private readonly ClaudeUsageClient _web;
     private readonly ClaudeCodeOAuthClient _oauth;
@@ -25,25 +30,30 @@ internal sealed class SetupForm : Form
     private readonly ConfigStore _configStore;
     private readonly AppConfig _config;
     private readonly CancellationTokenSource _cts = new();
+    private readonly bool _claudeCodeFound = File.Exists(ClaudeCodeOAuthClient.DefaultCredentialsPath);
 
-    // AutoSize does not wrap radio/check boxes, so they get a fixed size tall enough for two/five lines
-    private readonly RadioButton _modeOAuth = new()
-    {
-        AutoSize = false,
-        Size = new Size(440, 40),
-        Text = "Claude Code login (OAuth) - use this if claude.ai blocks the app with HTTP 403",
-    };
-    private readonly RadioButton _modeCookie = new() { AutoSize = true, Text = "claude.ai session cookie (sessionKey)" };
+    private readonly RadioButton _modeOAuth = new() { AutoSize = true, Text = "Use my Claude Code login (recommended)" };
+    private readonly RadioButton _modeCookie = new() { AutoSize = true, Text = "Use a claude.ai session cookie" };
+    private readonly LinkLabel _advanced = new() { AutoSize = true, Text = "Advanced: use a claude.ai cookie instead", Margin = new Padding(3, 10, 3, 3) };
 
     private readonly FlowLayoutPanel _cookiePanel = Vertical();
     private readonly FlowLayoutPanel _oauthPanel = Vertical();
-    private readonly TextBox _key = new() { UseSystemPasswordChar = true, Width = 440 };
-    private readonly ComboBox _org = new() { DropDownStyle = ComboBoxStyle.DropDown, Width = 440 };
-    private readonly CheckBox _accept = new() { AutoSize = false, Size = new Size(440, 110) };
-    private readonly Label _result = new() { AutoSize = true, MaximumSize = new Size(440, 0) };
-    private readonly Button _test = new() { Text = "Test Connection", Width = 130, Height = 28 };
-    private readonly Button _save = new() { Text = "Save", Width = 90, Height = 28 };
-    private readonly Button _cancel = new() { Text = "Cancel", Width = 90, Height = 28, DialogResult = DialogResult.Cancel };
+    private readonly TextBox _key = new() { UseSystemPasswordChar = true, Width = ContentWidth - 20 };
+    private readonly ComboBox _org = new() { DropDownStyle = ComboBoxStyle.DropDown, Width = ContentWidth - 20 };
+    private readonly CheckBox _accept = new() { AutoSize = true, MaximumSize = new Size(ContentWidth, 0), Text = ShortAck };
+    private readonly LinkLabel _details = new() { AutoSize = true, Text = "What does this mean?", Margin = new Padding(20, 0, 3, 3) };
+    private readonly Label _detailsText = new()
+    {
+        AutoSize = true,
+        MaximumSize = new Size(ContentWidth - 20, 0),
+        ForeColor = SystemColors.GrayText,
+        Margin = new Padding(20, 0, 3, 6),
+        Visible = false,
+    };
+    private readonly Label _result = new() { AutoSize = true, MaximumSize = new Size(ContentWidth, 0), Margin = new Padding(3, 10, 3, 3) };
+    private readonly Button _test = new() { Text = "Test connection", AutoSize = true, Height = 30 };
+    private readonly Button _save = new() { Text = "Start monitoring", AutoSize = true, Height = 30 };
+    private readonly Button _cancel = new() { Text = "Cancel", AutoSize = true, Height = 30, DialogResult = DialogResult.Cancel };
 
     public SetupForm(ClaudeUsageClient web, ClaudeCodeOAuthClient oauth, CredentialStore credentials,
         ConfigStore configStore, AppConfig config)
@@ -55,13 +65,16 @@ internal sealed class SetupForm : Form
         _config = config;
 
         Text = "Claude Usage - Setup";
+        Icon = AppIcon.Get();
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MaximizeBox = false;
         MinimizeBox = false;
         StartPosition = FormStartPosition.CenterScreen;
         AutoScaleMode = AutoScaleMode.Dpi;
-        ClientSize = new Size(480, 680);
+        AutoSize = true;
+        AutoSizeMode = AutoSizeMode.GrowAndShrink;
         CancelButton = _cancel;
+        AcceptButton = _save;
 
         if (!string.IsNullOrEmpty(config.OrganizationId)) _org.Text = config.OrganizationId;
 
@@ -70,78 +83,99 @@ internal sealed class SetupForm : Form
 
         var panel = new FlowLayoutPanel
         {
-            Dock = DockStyle.Fill,
+            AutoSize = true,
             FlowDirection = FlowDirection.TopDown,
             WrapContents = false,
-            AutoScroll = true,
             Padding = new Padding(16),
         };
-        panel.Controls.Add(new Label { AutoSize = true, Text = "Where should usage data come from?", Font = new Font(Font, FontStyle.Bold) });
-        panel.Controls.Add(_modeOAuth);
-        panel.Controls.Add(_modeCookie);
-        panel.Controls.Add(_oauthPanel);
-        panel.Controls.Add(_cookiePanel);
-        _accept.Margin = new Padding(3, 12, 3, 6);
-        panel.Controls.Add(_accept);
 
-        var buttons = new FlowLayoutPanel { AutoSize = true, WrapContents = false };
-        buttons.Controls.AddRange([_test, _save, _cancel]);
+        var header = new FlowLayoutPanel { AutoSize = true, WrapContents = false, Margin = new Padding(0, 0, 0, 8) };
+        header.Controls.Add(new PictureBox { Image = AppIcon.Draw(48), SizeMode = PictureBoxSizeMode.AutoSize, Margin = new Padding(3, 3, 12, 3) });
+        var titles = Vertical();
+        titles.Controls.Add(new Label
+        {
+            AutoSize = true,
+            Text = "Welcome to Claude Usage Tray",
+            Font = new Font(Font.FontFamily, Font.Size * 1.35f, FontStyle.Bold),
+            Margin = new Padding(3, 4, 3, 2),
+        });
+        titles.Controls.Add(new Label { AutoSize = true, Text = "Choose where your usage numbers come from.", ForeColor = SystemColors.GrayText });
+        header.Controls.Add(titles);
+        panel.Controls.Add(header);
+
+        panel.Controls.Add(_modeOAuth);
+        panel.Controls.Add(_oauthPanel);
+        panel.Controls.Add(_advanced);
+        panel.Controls.Add(_modeCookie);
+        panel.Controls.Add(_cookiePanel);
+
+        _accept.Margin = new Padding(3, 14, 3, 0);
+        panel.Controls.Add(WrapText.Fit(_accept, ContentWidth));
+        panel.Controls.Add(_details);
+        panel.Controls.Add(_detailsText);
+
+        var buttons = new FlowLayoutPanel { AutoSize = true, WrapContents = false, Margin = new Padding(0, 8, 0, 0) };
+        buttons.Controls.AddRange([_save, _test, _cancel]);
         panel.Controls.Add(buttons);
-        _result.Margin = new Padding(3, 10, 3, 3);
         panel.Controls.Add(_result);
         Controls.Add(panel);
 
         _modeOAuth.CheckedChanged += (_, _) => ApplyMode();
         _modeCookie.CheckedChanged += (_, _) => ApplyMode();
-        (_config.AuthMode == AuthMode.ClaudeCodeOAuth ? _modeOAuth : _modeCookie).Checked = true;
+        _advanced.LinkClicked += (_, _) => { _advanced.Visible = false; _modeCookie.Visible = true; _modeCookie.Checked = true; };
+        _details.LinkClicked += (_, _) => _detailsText.Visible = !_detailsText.Visible;
+
+        // the cookie route is advanced: shown up front only when it is already in use or Claude Code is not installed
+        var cookieFirst = _config.AuthMode == AuthMode.WebCookie && (_config.DisclaimerAccepted || !_claudeCodeFound);
+        _modeCookie.Visible = cookieFirst;
+        _advanced.Visible = !cookieFirst;
+        (cookieFirst ? _modeCookie : _modeOAuth).Checked = true;
         ApplyMode();
 
         _test.Click += async (_, _) => await TestAsync();
         _save.Click += (_, _) => Save();
+
+        // one-click setup: when Claude Code's login is here, check it right away so the user just presses Start
+        Shown += async (_, _) =>
+        {
+            if (SelectedMode == AuthMode.ClaudeCodeOAuth && _claudeCodeFound) await TestAsync();
+        };
     }
 
     private AuthMode SelectedMode => _modeOAuth.Checked ? AuthMode.ClaudeCodeOAuth : AuthMode.WebCookie;
 
     private void BuildOAuthPanel()
     {
+        _oauthPanel.Margin = new Padding(20, 0, 3, 3);
         _oauthPanel.Controls.Add(new Label
         {
             AutoSize = true,
-            MaximumSize = new Size(440, 0),
-            Margin = new Padding(3, 8, 3, 3),
-            Text = "Uses the login that Claude Code already keeps on this PC (~/.claude/.credentials.json). " +
-                   "This app only reads it at each refresh: it never copies, stores, logs or refreshes the token, so " +
-                   "nothing is saved here. Claude Code renews its own token; if it has expired, use Claude Code once " +
-                   "and this app recovers automatically. No sessionKey or organization ID is needed.",
+            MaximumSize = new Size(ContentWidth - 20, 0),
+            ForeColor = _claudeCodeFound ? SystemColors.ControlText : Color.Firebrick,
+            Margin = new Padding(3, 2, 3, 3),
+            Text = _claudeCodeFound
+                ? "Found a Claude Code login on this PC. Nothing is copied or stored, and it keeps working when Claude Code renews its login."
+                : "No Claude Code login found on this PC. Sign in to Claude Code (or the Claude desktop app's Code tab) first, then reopen this window.",
         });
     }
 
     private void BuildCookiePanel()
     {
+        _cookiePanel.Margin = new Padding(20, 0, 3, 3);
         _cookiePanel.Controls.Add(new Label
         {
             AutoSize = true,
-            MaximumSize = new Size(440, 0),
-            Margin = new Padding(3, 8, 3, 3),
-            Text = "Paste your claude.ai session cookie:\r\n" +
-                   "1. Open https://claude.ai and sign in.\r\n" +
+            MaximumSize = new Size(ContentWidth - 20, 0),
+            Margin = new Padding(3, 2, 3, 3),
+            Text = "1. Open https://claude.ai and sign in.\r\n" +
                    "2. Press F12 > Application (Chrome/Edge) or Storage (Firefox) > Cookies > https://claude.ai.\r\n" +
-                   "3. Copy the Value of the cookie named 'sessionKey' (starts with sk-ant-sid).\r\n" +
-                   "The cookie lasts about 30 days. It is stored encrypted (Windows DPAPI, current user only). " +
-                   "Note: claude.ai may block this app with a Cloudflare challenge (HTTP 403).",
+                   "3. Copy the value of the cookie named 'sessionKey' (starts with sk-ant-sid).\r\n" +
+                   "It lasts about 30 days. claude.ai sometimes blocks apps like this one (HTTP 403).",
         });
-        _cookiePanel.Controls.Add(Caption("Claude session credential (sessionKey)"));
+        _cookiePanel.Controls.Add(Caption("Session cookie (sessionKey)"));
         _cookiePanel.Controls.Add(_key);
-        _cookiePanel.Controls.Add(Caption("Organization ID (auto-detected by Test Connection, or type it)"));
+        _cookiePanel.Controls.Add(Caption("Organization (found by Test connection, or paste 'lastActiveOrg')"));
         _cookiePanel.Controls.Add(_org);
-        _cookiePanel.Controls.Add(new Label
-        {
-            AutoSize = true,
-            MaximumSize = new Size(440, 0),
-            ForeColor = SystemColors.GrayText,
-            Text = "Tip: on claude.ai open F12 > Application > Cookies > https://claude.ai and copy the value of " +
-                   "'lastActiveOrg' (a GUID like 123e4567-e89b-12d3-a456-426614174000).",
-        });
     }
 
     private void ApplyMode()
@@ -149,7 +183,7 @@ internal sealed class SetupForm : Form
         var oauth = SelectedMode == AuthMode.ClaudeCodeOAuth;
         _oauthPanel.Visible = oauth;
         _cookiePanel.Visible = !oauth;
-        _accept.Text = oauth ? OAuthAck : CookieAck;
+        _detailsText.Text = oauth ? OAuthAck : CookieAck;
         _accept.Checked = _config.DisclaimerAccepted && _config.AuthMode == SelectedMode;
         _result.Text = string.Empty;
     }
@@ -180,7 +214,7 @@ internal sealed class SetupForm : Form
 
     private async Task TestOAuthAsync()
     {
-        Show("Reading Claude Code login and fetching usage...", error: false);
+        Show("Checking your Claude Code login...", error: false);
         var usage = await _oauth.GetUsageAsync(_cts.Token);
         ShowUsageResult(usage);
     }
@@ -188,9 +222,9 @@ internal sealed class SetupForm : Form
     private async Task TestCookieAsync()
     {
         var key = ClaudeUsageClient.NormalizeSessionKey(_key.Text);
-        if (key is null) { Show("Enter the sessionKey value first (format looks invalid).", error: true); return; }
+        if (key is null) { Show("Paste the sessionKey value first (the format looks wrong).", error: true); return; }
 
-        Show("Looking up organizations...", error: false);
+        Show("Looking up your organization...", error: false);
         var discovery = await _web.DiscoverOrganizationsAsync(key, _cts.Token);
         if (discovery.IsSuccess)
         {
@@ -203,13 +237,13 @@ internal sealed class SetupForm : Form
         else
         {
             Logger.Warn($"Organization discovery failed: {discovery.Error} - {discovery.Message}");
-            Show($"Could not detect the organization automatically: {discovery.Message}\r\n" +
-                 "You can type the organization ID manually (see the tip above), then Test again.", error: true);
+            Show($"Couldn't find your organization automatically: {discovery.Message}\r\n" +
+                 "Paste the 'lastActiveOrg' cookie value into the Organization box, then test again.", error: true);
             if (discovery.Error is UsageErrorKind.Authentication or UsageErrorKind.Forbidden) return;
         }
 
         var orgId = SelectedOrganizationId();
-        if (orgId is null) { Show("Organization ID is required.", error: true); return; }
+        if (orgId is null) { Show("An organization is required.", error: true); return; }
 
         Show("Fetching usage...", error: false);
         ShowUsageResult(await _web.FetchUsageAsync(key, orgId, _cts.Token));
@@ -219,7 +253,8 @@ internal sealed class SetupForm : Form
     {
         if (usage.IsSuccess)
         {
-            Show($"Connection OK. 5-hour usage: {UsageMath.DisplayUtilization(usage.Usage!.FiveHour.Utilization)}%.", error: false);
+            Show($"Connected. Your 5-hour usage is {UsageMath.DisplayUtilization(usage.Usage!.FiveHour.Utilization)}%. " +
+                 "Press Start monitoring to finish.", error: false);
             return;
         }
         Logger.Warn($"Setup test failed: {usage.Error} - {usage.Message}");
@@ -228,7 +263,12 @@ internal sealed class SetupForm : Form
 
     private void Save()
     {
-        if (!_accept.Checked) { Show("Please tick the acknowledgement first.", error: true); return; }
+        if (!_accept.Checked)
+        {
+            Show("Tick the box above to continue.", error: true);
+            _accept.Focus();
+            return;
+        }
 
         if (SelectedMode == AuthMode.ClaudeCodeOAuth)
         {
@@ -239,9 +279,9 @@ internal sealed class SetupForm : Form
         else
         {
             var key = ClaudeUsageClient.NormalizeSessionKey(_key.Text);
-            if (key is null) { Show("The sessionKey value is missing or has an invalid format.", error: true); return; }
+            if (key is null) { Show("The sessionKey value is missing or the format looks wrong.", error: true); return; }
             var orgId = SelectedOrganizationId();
-            if (orgId is null) { Show("Enter a valid organization ID (use Test Connection to detect it).", error: true); return; }
+            if (orgId is null) { Show("Enter an organization (Test connection finds it for you).", error: true); return; }
 
             try
             {
@@ -250,7 +290,7 @@ internal sealed class SetupForm : Form
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Security.Cryptography.CryptographicException)
             {
                 Logger.Error($"Saving credential failed: {ex.GetType().Name}");
-                Show("Could not save the credential securely.", error: true);
+                Show("Couldn't save the cookie securely.", error: true);
                 return;
             }
             _config.AuthMode = AuthMode.WebCookie;
@@ -275,7 +315,7 @@ internal sealed class SetupForm : Form
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             Logger.Error($"Saving config failed: {ex.GetType().Name}");
-            Show("Could not save the settings.", error: true);
+            Show("Couldn't save the settings.", error: true);
             return false;
         }
     }

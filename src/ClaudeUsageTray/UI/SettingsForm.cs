@@ -9,14 +9,14 @@ internal sealed class SettingsForm : Form
 {
     private const int ContentWidth = 380;
 
-    private static readonly (PollingMode Mode, string Text)[] PollingChoices =
+    private static readonly (PollingMode Mode, string Text, string Detail)[] PollingChoices =
     [
-        (PollingMode.Balanced, "Balanced - every 1.5 min while you use Claude Code, every 15 min otherwise"),
-        (PollingMode.Frequent, "Frequent - every minute while active, every 5 min otherwise"),
-        (PollingMode.Saver, "Saver - every 3 min while active, every 30 min otherwise"),
+        (PollingMode.Balanced, "Balanced (recommended)", "Every 1.5 min while you use Claude Code, every 15 min otherwise."),
+        (PollingMode.Frequent, "Frequent", "Every minute while you use Claude Code, every 5 min otherwise."),
+        (PollingMode.Saver, "Saver", "Every 3 min while you use Claude Code, every 30 min otherwise."),
     ];
 
-    private readonly ComboBox _polling = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = ContentWidth };
+    private readonly ComboBox _polling = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 200 };
     private readonly CheckBox _startup = new() { AutoSize = true, Text = "Start with Windows" };
     private readonly CheckBox _autoLaunchClaudeCode = new()
     {
@@ -68,7 +68,7 @@ internal sealed class SettingsForm : Form
         AutoSize = true;
         AutoSizeMode = AutoSizeMode.GrowAndShrink;
 
-        var tabs = new TabControl { Width = ContentWidth + 40, Height = 360 };
+        var tabs = new TabControl { Width = ContentWidth + 40, Height = 410 };
         tabs.TabPages.Add(GeneralTab(config, startupEnabled, credentialAgeDays, updateCredential, removeCredential,
             credentialAvailable, mode, claudeCliAvailable));
         tabs.TabPages.Add(NotificationsTab(config));
@@ -156,7 +156,7 @@ internal sealed class SettingsForm : Form
         {
             _autoLaunchClaudeCode.Checked = config.AutoLaunchClaudeCode && claudeCliAvailable;
             _autoLaunchClaudeCode.Enabled = claudeCliAvailable;
-            panel.Controls.Add(_autoLaunchClaudeCode);
+            panel.Controls.Add(WrapText.Fit(_autoLaunchClaudeCode, ContentWidth));
             if (!claudeCliAvailable)
                 panel.Controls.Add(Note("The claude command-line tool isn't installed, so the login can't be refreshed for you. " +
                                         "Opening Claude Code or the Claude app does the same job."));
@@ -167,11 +167,14 @@ internal sealed class SettingsForm : Form
         }
 
         panel.Controls.Add(Heading("How often to check"));
-        foreach (var (_, text) in PollingChoices) _polling.Items.Add(text);
+        foreach (var (_, text, _) in PollingChoices) _polling.Items.Add(text);
+        var pollingDetail = Note(string.Empty);
+        _polling.SelectedIndexChanged += (_, _) =>
+            pollingDetail.Text = PollingChoices[Math.Max(0, _polling.SelectedIndex)].Detail +
+                                 " Checking less often when idle avoids \"too many requests\" errors.";
         _polling.SelectedIndex = Math.Max(0, Array.FindIndex(PollingChoices, c => c.Mode == config.PollingMode));
         panel.Controls.Add(_polling);
-        panel.Controls.Add(Note("Usage only changes while Claude is in use, so checking less often when idle avoids " +
-                                "\"too many requests\" errors."));
+        panel.Controls.Add(pollingDetail);
 
         _startup.Checked = startupEnabled;
         _startup.Margin = new Padding(3, 12, 3, 3);
@@ -248,7 +251,7 @@ internal sealed class SettingsForm : Form
         panel.Controls.Add(opacityRow);
 
         _overlayLocked.Margin = new Padding(3, 6, 3, 0);
-        panel.Controls.Add(_overlayLocked);
+        panel.Controls.Add(WrapText.Fit(_overlayLocked, ContentWidth));
 
         var resetPosition = new Button { Text = "Reset position", AutoSize = true, Height = 28, Margin = new Padding(3, 10, 3, 0) };
         resetPosition.Click += (_, _) => resetOverlayPosition();
