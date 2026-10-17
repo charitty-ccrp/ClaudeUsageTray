@@ -142,7 +142,7 @@ public class ClaudeCodeOAuthClientTests
 
     [Theory]
     [InlineData(HttpStatusCode.Forbidden, UsageErrorKind.Forbidden)]
-    [InlineData(HttpStatusCode.TooManyRequests, UsageErrorKind.Server)]
+    [InlineData(HttpStatusCode.TooManyRequests, UsageErrorKind.RateLimited)]
     [InlineData(HttpStatusCode.BadGateway, UsageErrorKind.Server)]
     public async Task Other_statuses_map_like_the_web_client(HttpStatusCode status, UsageErrorKind expected)
     {

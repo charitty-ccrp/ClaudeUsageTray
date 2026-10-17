@@ -71,22 +71,24 @@ public class ClaudeCodeRecoveryPolicyTests
 public class ClaudeCodeLauncherTests
 {
     [Fact]
-    public void Reports_a_helpful_error_when_the_command_cannot_be_found()
+    public void Reports_a_helpful_error_when_claude_is_not_installed()
     {
-        using var launcher = new ClaudeCodeLauncher("cut-tests-command-that-does-not-exist-xyz");
+        using var launcher = new ClaudeCodeLauncher(resolve: () => null);
 
         var (started, error) = launcher.Launch();
 
         Assert.False(started);
         Assert.False(launcher.IsRunning);
-        Assert.Contains("cut-tests-command-that-does-not-exist-xyz", error);
+        Assert.False(launcher.IsAvailable);
+        Assert.Equal(ClaudeCodeLauncher.NotInstalledMessage, error);
     }
 
     [Fact]
     public void Starts_a_process_reports_it_as_running_and_never_starts_a_second_one_until_it_exits()
     {
         // "ping" against localhost runs for a short, predictable time and always exists on Windows, so this needs no fixture on disk.
-        using var launcher = new ClaudeCodeLauncher("ping.exe", arguments: "-n 3 127.0.0.1", workingDirectory: Path.GetTempPath());
+        var ping = Path.Combine(Environment.SystemDirectory, "ping.exe");
+        using var launcher = new ClaudeCodeLauncher(arguments: "-n 3 127.0.0.1", workingDirectory: Path.GetTempPath(), resolve: () => ping);
 
         var (started, error) = launcher.Launch();
         Assert.True(started);
@@ -100,5 +102,25 @@ public class ClaudeCodeLauncherTests
         var waited = SpinWait.SpinUntil(() => !launcher.IsRunning, TimeSpan.FromSeconds(10));
         Assert.True(waited, "ping should have finished within 10 seconds");
         Assert.True(launcher.Launch().Started, "a new launch must succeed once the previous process has exited");
+    }
+
+    [Fact]
+    public void Resolve_prefers_PATH_then_falls_back_to_the_usual_install_folders()
+    {
+        var onPath = Path.Combine(@"C:\tools", "claude.exe");
+        var native = Path.Combine(@"C:\Users\me", ".local", "bin", "claude.exe");
+        var npm = Path.Combine(@"C:\Users\me\AppData\Roaming", "npm", "claude.cmd");
+
+        Assert.Equal(onPath, ClaudeCodeLauncher.Resolve(@"C:\tools;relative\dir", @"C:\Users\me", @"C:\Users\me\AppData\Roaming",
+            p => p == onPath || p == native));
+        Assert.Equal(native, ClaudeCodeLauncher.Resolve(@"C:\tools", @"C:\Users\me", @"C:\Users\me\AppData\Roaming", p => p == native));
+        Assert.Equal(npm, ClaudeCodeLauncher.Resolve(null, @"C:\Users\me", @"C:\Users\me\AppData\Roaming", p => p == npm));
+        Assert.Null(ClaudeCodeLauncher.Resolve(@"C:\tools", @"C:\Users\me", @"C:\Users\me\AppData\Roaming", _ => false));
+    }
+
+    [Fact]
+    public void Resolve_ignores_relative_PATH_entries()
+    {
+        Assert.Null(ClaudeCodeLauncher.Resolve(@".;bin", @"C:\Users\me", @"C:\x", p => !Path.IsPathFullyQualified(p)));
     }
 }

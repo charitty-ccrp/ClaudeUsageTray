@@ -64,15 +64,15 @@ internal static class PanelModelBuilder
         var model = new PanelModel(title, badge, primary, burn, burnWarn, others, status, tone, footer,
             Summary(title, primary, others))
         {
-            ShortStatus = state.Error == UsageErrorKind.None ? null : UsageText.ShortError(state.Error),
-            IsStale = state.IsStale,
+            ShortStatus = state.Error == UsageErrorKind.None || state.IsQuietFailure ? null : UsageText.ShortError(state.Error),
+            IsStale = state.IsStale && !state.IsQuietFailure,
         };
         return model with { Signature = Sign(model) };
     }
 
     public static (string? Text, StatusTone Tone) Status(UsageState state, int? credentialAgeDays)
     {
-        if (state.Error != UsageErrorKind.None)
+        if (state.Error != UsageErrorKind.None && !state.IsQuietFailure)
         {
             var text = string.IsNullOrWhiteSpace(state.ErrorMessage) ? UsageText.LongError(state.Error) : state.ErrorMessage;
             if (state.Snapshot is { } snapshot)
@@ -90,7 +90,7 @@ internal static class PanelModelBuilder
         if (refreshing) return "Refreshing...";
 
         var head = state.LastSuccessfulUpdate is { } at
-            ? (state.IsStale ? $"Last update {TimeFormatter.FormatClock(at)} (STALE)" : $"Updated {TimeFormatter.FormatClock(at)}")
+            ? (state.IsStale && !state.IsQuietFailure ? $"Last update {TimeFormatter.FormatClock(at)} (last known value)" : $"Updated {TimeFormatter.FormatClock(at)}")
             : "No data yet";
 
         if (state.NextAttemptAt is { } next)

@@ -176,7 +176,7 @@ public class ClaudeUsageClientHttpTests
     [InlineData(HttpStatusCode.BadGateway, UsageErrorKind.Server)]
     [InlineData(HttpStatusCode.ServiceUnavailable, UsageErrorKind.Server)]
     [InlineData(HttpStatusCode.GatewayTimeout, UsageErrorKind.Server)]
-    [InlineData(HttpStatusCode.TooManyRequests, UsageErrorKind.Server)]
+    [InlineData(HttpStatusCode.TooManyRequests, UsageErrorKind.RateLimited)]
     [InlineData(HttpStatusCode.NotFound, UsageErrorKind.InvalidResponse)]
     [InlineData(HttpStatusCode.Redirect, UsageErrorKind.InvalidResponse)]
     public async Task Http_status_maps_to_error_kind(HttpStatusCode status, UsageErrorKind expected)

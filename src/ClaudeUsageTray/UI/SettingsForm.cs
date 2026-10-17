@@ -1,18 +1,38 @@
 using ClaudeUsageTray.App;
 using ClaudeUsageTray.Models;
+using ClaudeUsageTray.Services;
 
 namespace ClaudeUsageTray.UI;
 
+/// <summary>Settings in four short tabs. Nothing is saved until OK; ApplyTo copies the choices into a config.</summary>
 internal sealed class SettingsForm : Form
 {
-    private readonly NumericUpDown _interval = new()
+    private const int ContentWidth = 380;
+
+    private static readonly (PollingMode Mode, string Text)[] PollingChoices =
+    [
+        (PollingMode.Balanced, "Balanced - every 1.5 min while you use Claude Code, every 15 min otherwise"),
+        (PollingMode.Frequent, "Frequent - every minute while active, every 5 min otherwise"),
+        (PollingMode.Saver, "Saver - every 3 min while active, every 30 min otherwise"),
+    ];
+
+    private readonly ComboBox _polling = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = ContentWidth };
+    private readonly CheckBox _startup = new() { AutoSize = true, Text = "Start with Windows" };
+    private readonly CheckBox _autoLaunchClaudeCode = new()
     {
-        Minimum = AppConstants.MinRefreshSeconds,
-        Maximum = AppConstants.MaxRefreshSeconds,
-        Width = 80,
+        AutoSize = true,
+        MaximumSize = new Size(ContentWidth, 0),
+        Text = "When Claude Code's login expires, refresh it automatically (runs \"claude update\" in a window that closes itself)",
     };
-    private readonly CheckBox _startup = new() { AutoSize = true, Text = "Start with Windows (per-user Startup folder)" };
-    private readonly CheckBox _notify = new() { AutoSize = true, Text = "Notify me when usage gets high (70% / 85% / 95%) and when a limit resets" };
+
+    private readonly CheckBox _notify = new() { AutoSize = true, Text = "Show notifications" };
+    private readonly CheckBox _notifyWarning = new() { AutoSize = true, Text = "When usage reaches 70% (yellow)" };
+    private readonly CheckBox _notifyHigh = new() { AutoSize = true, Text = "When usage reaches 85% (orange)" };
+    private readonly CheckBox _notifyCritical = new() { AutoSize = true, Text = "When usage reaches 95% (red)" };
+    private readonly CheckBox _notifyReset = new() { AutoSize = true, Text = "When a limit resets after a warning" };
+    private readonly CheckBox _quiet = new() { AutoSize = true, Text = "Quiet hours, from" };
+    private readonly ComboBox _quietStart = HourPicker();
+    private readonly ComboBox _quietEnd = HourPicker();
 
     private readonly CheckBox _overlayOn = new() { AutoSize = true, Text = "Show desktop overlay" };
     private readonly RadioButton _overlayCompact = new() { AutoSize = true, Text = "Compact (5-hour and weekly bars)" };
@@ -30,31 +50,182 @@ internal sealed class SettingsForm : Form
     private readonly CheckBox _overlayLocked = new()
     {
         AutoSize = true,
-        MaximumSize = new Size(340, 0),
-        Text = "Lock position (click-through). While locked, unlock it from the tray icon's Overlay menu.",
-    };
-
-    private readonly CheckBox _autoLaunchClaudeCode = new()
-    {
-        AutoSize = true,
-        MaximumSize = new Size(360, 0),
-        Text = "When Claude Code's login expires, run \"claude update\" in the background to refresh it " +
-               "(the window closes itself when done)",
+        MaximumSize = new Size(ContentWidth, 0),
+        Text = "Lock position and let clicks pass through. Unlock it from the tray icon's Overlay menu.",
     };
 
     public SettingsForm(AppConfig config, bool startupEnabled, int? credentialAgeDays,
         Func<bool> updateCredential, Action removeCredential, bool credentialAvailable, AuthMode mode,
-        bool autoLaunchClaudeCode, Action<int> previewOverlayOpacity, Action resetOverlayPosition)
+        bool claudeCliAvailable, Action<int> previewOverlayOpacity, Action resetOverlayPosition)
     {
         Text = "Claude Usage - Settings";
+        Icon = AppIcon.Get();
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MaximizeBox = false;
         MinimizeBox = false;
         StartPosition = FormStartPosition.CenterScreen;
         AutoScaleMode = AutoScaleMode.Dpi;
-        ClientSize = new Size(420, mode == AuthMode.ClaudeCodeOAuth ? 680 : 640);
+        AutoSize = true;
+        AutoSizeMode = AutoSizeMode.GrowAndShrink;
 
-        _autoLaunchClaudeCode.Checked = autoLaunchClaudeCode;
+        var tabs = new TabControl { Width = ContentWidth + 40, Height = 360 };
+        tabs.TabPages.Add(GeneralTab(config, startupEnabled, credentialAgeDays, updateCredential, removeCredential,
+            credentialAvailable, mode, claudeCliAvailable));
+        tabs.TabPages.Add(NotificationsTab(config));
+        tabs.TabPages.Add(OverlayTab(config, previewOverlayOpacity, resetOverlayPosition));
+        tabs.TabPages.Add(AboutTab());
+
+        var ok = new Button { Text = "OK", Width = 90, Height = 28, DialogResult = DialogResult.OK };
+        var cancel = new Button { Text = "Cancel", Width = 90, Height = 28, DialogResult = DialogResult.Cancel };
+        var buttons = new FlowLayoutPanel
+        {
+            AutoSize = true,
+            FlowDirection = FlowDirection.RightToLeft,
+            Dock = DockStyle.Fill,
+            Margin = new Padding(0, 8, 0, 0),
+        };
+        buttons.Controls.AddRange([cancel, ok]);
+
+        var root = new TableLayoutPanel { AutoSize = true, ColumnCount = 1, Padding = new Padding(12) };
+        root.Controls.Add(tabs);
+        root.Controls.Add(buttons);
+        Controls.Add(root);
+
+        AcceptButton = ok;
+        CancelButton = cancel;
+    }
+
+    /// <summary>Copies the user's choices into <paramref name="config"/>.</summary>
+    public void ApplyTo(AppConfig config)
+    {
+        config.PollingMode = PollingChoices[Math.Max(0, _polling.SelectedIndex)].Mode;
+        config.StartWithWindows = _startup.Checked;
+        if (_autoLaunchClaudeCode.Enabled) config.AutoLaunchClaudeCode = _autoLaunchClaudeCode.Checked; // keep the choice while the CLI is missing
+        config.NotificationsEnabled = _notify.Checked;
+        config.NotifyWarning = _notifyWarning.Checked;
+        config.NotifyHigh = _notifyHigh.Checked;
+        config.NotifyCritical = _notifyCritical.Checked;
+        config.NotifyReset = _notifyReset.Checked;
+        config.QuietHoursEnabled = _quiet.Checked;
+        config.QuietStartHour = Math.Max(0, _quietStart.SelectedIndex);
+        config.QuietEndHour = Math.Max(0, _quietEnd.SelectedIndex);
+        config.OverlayEnabled = _overlayOn.Checked;
+        config.OverlayCompact = _overlayCompact.Checked;
+        config.OverlayLocked = _overlayLocked.Checked;
+        config.OverlayOpacity = _overlayOpacity.Value;
+    }
+
+    public bool StartWithWindows => _startup.Checked;
+
+    // ---------- tabs ----------
+
+    private TabPage GeneralTab(AppConfig config, bool startupEnabled, int? credentialAgeDays, Func<bool> updateCredential,
+        Action removeCredential, bool credentialAvailable, AuthMode mode, bool claudeCliAvailable)
+    {
+        var panel = Page();
+
+        panel.Controls.Add(Heading("Data source"));
+        var source = mode == AuthMode.ClaudeCodeOAuth
+            ? "Claude Code login on this PC (read-only; this app stores nothing)."
+            : !credentialAvailable
+                ? "claude.ai cookie - not set."
+                : credentialAgeDays is { } days
+                    ? $"claude.ai cookie, saved {days} day(s) ago. Cookies last about 30 days."
+                    : "claude.ai cookie, saved.";
+        panel.Controls.Add(Note(source));
+
+        var sourceButtons = new FlowLayoutPanel { AutoSize = true, WrapContents = false };
+        var change = new Button { Text = "Change source...", AutoSize = true, Height = 28 };
+        change.Click += (_, _) => updateCredential();
+        sourceButtons.Controls.Add(change);
+        if (mode == AuthMode.WebCookie)
+        {
+            var remove = new Button { Text = "Remove saved cookie", AutoSize = true, Height = 28, Enabled = credentialAvailable };
+            remove.Click += (_, _) =>
+            {
+                if (MessageBox.Show(this, "Delete the saved cookie? Monitoring stops until you add a new one.",
+                        "Remove cookie", MessageBoxButtons.OKCancel, MessageBoxIcon.Warning) != DialogResult.OK) return;
+                removeCredential();
+                remove.Enabled = false;
+            };
+            sourceButtons.Controls.Add(remove);
+        }
+        panel.Controls.Add(sourceButtons);
+
+        if (mode == AuthMode.ClaudeCodeOAuth)
+        {
+            _autoLaunchClaudeCode.Checked = config.AutoLaunchClaudeCode && claudeCliAvailable;
+            _autoLaunchClaudeCode.Enabled = claudeCliAvailable;
+            panel.Controls.Add(_autoLaunchClaudeCode);
+            if (!claudeCliAvailable)
+                panel.Controls.Add(Note("The claude command-line tool isn't installed, so the login can't be refreshed for you. " +
+                                        "Opening Claude Code or the Claude app does the same job."));
+        }
+        else
+        {
+            _autoLaunchClaudeCode.Checked = config.AutoLaunchClaudeCode;
+        }
+
+        panel.Controls.Add(Heading("How often to check"));
+        foreach (var (_, text) in PollingChoices) _polling.Items.Add(text);
+        _polling.SelectedIndex = Math.Max(0, Array.FindIndex(PollingChoices, c => c.Mode == config.PollingMode));
+        panel.Controls.Add(_polling);
+        panel.Controls.Add(Note("Usage only changes while Claude is in use, so checking less often when idle avoids " +
+                                "\"too many requests\" errors."));
+
+        _startup.Checked = startupEnabled;
+        _startup.Margin = new Padding(3, 12, 3, 3);
+        panel.Controls.Add(_startup);
+
+        return Tab("General", panel);
+    }
+
+    private TabPage NotificationsTab(AppConfig config)
+    {
+        var panel = Page();
+
+        _notify.Checked = config.NotificationsEnabled;
+        _notifyWarning.Checked = config.NotifyWarning;
+        _notifyHigh.Checked = config.NotifyHigh;
+        _notifyCritical.Checked = config.NotifyCritical;
+        _notifyReset.Checked = config.NotifyReset;
+        _quiet.Checked = config.QuietHoursEnabled;
+        _quietStart.SelectedIndex = Math.Clamp(config.QuietStartHour, 0, 23);
+        _quietEnd.SelectedIndex = Math.Clamp(config.QuietEndHour, 0, 23);
+
+        panel.Controls.Add(_notify);
+        CheckBox[] levels = [_notifyWarning, _notifyHigh, _notifyCritical, _notifyReset];
+        foreach (var box in levels)
+        {
+            box.Margin = new Padding(22, 4, 3, 0);
+            panel.Controls.Add(box);
+        }
+
+        var quietRow = new FlowLayoutPanel { AutoSize = true, WrapContents = false, Margin = new Padding(3, 16, 3, 3) };
+        _quiet.Margin = new Padding(0, 4, 4, 0);
+        quietRow.Controls.Add(_quiet);
+        quietRow.Controls.Add(_quietStart);
+        quietRow.Controls.Add(new Label { AutoSize = true, Text = "to", Margin = new Padding(6, 6, 6, 0) });
+        quietRow.Controls.Add(_quietEnd);
+        panel.Controls.Add(quietRow);
+        panel.Controls.Add(Note("During quiet hours the icon still updates; only pop-ups are held back."));
+
+        void Sync()
+        {
+            foreach (var box in levels) box.Enabled = _notify.Checked;
+            _quiet.Enabled = _notify.Checked;
+            _quietStart.Enabled = _quietEnd.Enabled = _notify.Checked && _quiet.Checked;
+        }
+        _notify.CheckedChanged += (_, _) => Sync();
+        _quiet.CheckedChanged += (_, _) => Sync();
+        Sync();
+
+        return Tab("Notifications", panel);
+    }
+
+    private TabPage OverlayTab(AppConfig config, Action<int> previewOverlayOpacity, Action resetOverlayPosition)
+    {
+        var panel = Page();
 
         _overlayOn.Checked = config.OverlayEnabled;
         _overlayCompact.Checked = config.OverlayCompact;
@@ -63,61 +234,25 @@ internal sealed class SettingsForm : Form
         _overlayOpacityValue.Text = $"{_overlayOpacity.Value}%";
         _overlayLocked.Checked = config.OverlayLocked;
 
-        _interval.Value = Math.Clamp(config.RefreshIntervalSeconds, AppConstants.MinRefreshSeconds, AppConstants.MaxRefreshSeconds);
-        _startup.Checked = startupEnabled;
-        _notify.Checked = config.NotificationsEnabled;
+        panel.Controls.Add(Note("A small always-on-top window showing your usage on the desktop."));
+        panel.Controls.Add(_overlayOn);
+        _overlayCompact.Margin = new Padding(22, 6, 3, 0);
+        _overlayFull.Margin = new Padding(22, 2, 3, 0);
+        panel.Controls.AddRange([_overlayCompact, _overlayFull]);
 
-        var panel = new FlowLayoutPanel
-        {
-            Dock = DockStyle.Fill,
-            FlowDirection = FlowDirection.TopDown,
-            WrapContents = false,
-            AutoScroll = true,
-            Padding = new Padding(16),
-        };
-
-        var intervalRow = new FlowLayoutPanel { AutoSize = true, WrapContents = false };
-        intervalRow.Controls.Add(new Label { AutoSize = true, Text = "Refresh every (seconds):", Margin = new Padding(0, 6, 6, 0) });
-        intervalRow.Controls.Add(_interval);
-        panel.Controls.Add(intervalRow);
-
-        _startup.Margin = new Padding(3, 12, 3, 3);
-        panel.Controls.Add(_startup);
-
-        _notify.MaximumSize = new Size(380, 0);
-        _notify.Margin = new Padding(3, 8, 3, 3);
-        panel.Controls.Add(_notify);
-
-        // ----- desktop overlay -----
-        var overlayBox = new GroupBox { Text = "Desktop overlay", Width = 380, AutoSize = true, Margin = new Padding(3, 14, 3, 3) };
-        var overlayPanel = new FlowLayoutPanel
-        {
-            Dock = DockStyle.Fill,
-            AutoSize = true,
-            FlowDirection = FlowDirection.TopDown,
-            WrapContents = false,
-            Padding = new Padding(8, 4, 8, 8),
-        };
-        overlayPanel.Controls.Add(_overlayOn);
-        _overlayCompact.Margin = new Padding(18, 6, 3, 0);
-        _overlayFull.Margin = new Padding(18, 2, 3, 0);
-        overlayPanel.Controls.AddRange([_overlayCompact, _overlayFull]);
-
-        var opacityRow = new FlowLayoutPanel { AutoSize = true, WrapContents = false, Margin = new Padding(3, 6, 3, 0) };
+        var opacityRow = new FlowLayoutPanel { AutoSize = true, WrapContents = false, Margin = new Padding(3, 8, 3, 0) };
         opacityRow.Controls.Add(new Label { AutoSize = true, Text = "Opacity", Margin = new Padding(0, 10, 6, 0) });
         opacityRow.Controls.Add(_overlayOpacity);
         _overlayOpacityValue.Margin = new Padding(6, 10, 0, 0);
         opacityRow.Controls.Add(_overlayOpacityValue);
-        overlayPanel.Controls.Add(opacityRow);
+        panel.Controls.Add(opacityRow);
 
         _overlayLocked.Margin = new Padding(3, 6, 3, 0);
-        overlayPanel.Controls.Add(_overlayLocked);
+        panel.Controls.Add(_overlayLocked);
 
-        var resetPosition = new Button { Text = "Reset position", Width = 130, Height = 28, Margin = new Padding(3, 8, 3, 0) };
+        var resetPosition = new Button { Text = "Reset position", AutoSize = true, Height = 28, Margin = new Padding(3, 10, 3, 0) };
         resetPosition.Click += (_, _) => resetOverlayPosition();
-        overlayPanel.Controls.Add(resetPosition);
-        overlayBox.Controls.Add(overlayPanel);
-        panel.Controls.Add(overlayBox);
+        panel.Controls.Add(resetPosition);
 
         // live preview: the overlay follows the slider immediately; Cancel restores the saved value
         _overlayOpacity.ValueChanged += (_, _) =>
@@ -126,66 +261,65 @@ internal sealed class SettingsForm : Form
             previewOverlayOpacity(_overlayOpacity.Value);
         };
 
-        var credentialText = mode == AuthMode.ClaudeCodeOAuth
-            ? "Source: Claude Code login (read-only, nothing stored by this app)"
-            : !credentialAvailable
-                ? "Source: claude.ai cookie - not set"
-                : credentialAgeDays is { } days
-                    ? $"Source: claude.ai cookie, saved {days} day(s) ago (sessions last about 30 days)"
-                    : "Source: claude.ai cookie, saved";
-        panel.Controls.Add(new Label { AutoSize = true, MaximumSize = new Size(360, 0), Text = credentialText, Margin = new Padding(3, 14, 3, 3) });
+        void Sync() => _overlayCompact.Enabled = _overlayFull.Enabled = _overlayOpacity.Enabled = _overlayLocked.Enabled = _overlayOn.Checked;
+        _overlayOn.CheckedChanged += (_, _) => Sync();
+        Sync();
 
-        if (mode == AuthMode.ClaudeCodeOAuth)
-        {
-            _autoLaunchClaudeCode.Margin = new Padding(3, 6, 3, 3);
-            panel.Controls.Add(_autoLaunchClaudeCode);
-        }
-
-        var credentialButtons = new FlowLayoutPanel { AutoSize = true, WrapContents = false };
-        var update = new Button { Text = "Change source...", Width = 150, Height = 28 };
-        var remove = new Button { Text = "Remove saved cookie", Width = 150, Height = 28, Enabled = credentialAvailable };
-        update.Click += (_, _) => updateCredential();
-        remove.Click += (_, _) =>
-        {
-            if (MessageBox.Show(this, "Delete the stored credential? Monitoring stops until you add a new one.",
-                    "Remove credential", MessageBoxButtons.OKCancel, MessageBoxIcon.Warning) == DialogResult.OK)
-            {
-                removeCredential();
-                remove.Enabled = false;
-            }
-        };
-        credentialButtons.Controls.AddRange([update, remove]);
-        panel.Controls.Add(credentialButtons);
-
-        var version = typeof(SettingsForm).Assembly.GetName().Version?.ToString(3) ?? "0.1.0";
-        panel.Controls.Add(new Label
-        {
-            AutoSize = true,
-            MaximumSize = new Size(380, 0),
-            ForeColor = SystemColors.GrayText,
-            Margin = new Padding(3, 16, 3, 3),
-            Text = $"About: Claude 5-Hour Usage Tray Monitor v{version}. Shows the usage percentages reported by Claude through " +
-                   "undocumented endpoints that may change or stop working at any time. The \"could run out by\" time is our own " +
-                   "estimate from recent readings. Not affiliated with Anthropic.",
-        });
-
-        var ok = new Button { Text = "OK", Width = 90, Height = 28, DialogResult = DialogResult.OK, Margin = new Padding(3, 20, 3, 3) };
-        var cancel = new Button { Text = "Cancel", Width = 90, Height = 28, DialogResult = DialogResult.Cancel, Margin = new Padding(3, 20, 3, 3) };
-        var okRow = new FlowLayoutPanel { AutoSize = true, WrapContents = false };
-        okRow.Controls.AddRange([ok, cancel]);
-        panel.Controls.Add(okRow);
-        Controls.Add(panel);
-
-        AcceptButton = ok;
-        CancelButton = cancel;
+        return Tab("Overlay", panel);
     }
 
-    public int RefreshIntervalSeconds => (int)_interval.Value;
-    public bool StartWithWindows => _startup.Checked;
-    public bool NotificationsEnabled => _notify.Checked;
-    public bool OverlayEnabled => _overlayOn.Checked;
-    public bool OverlayCompact => _overlayCompact.Checked;
-    public bool OverlayLocked => _overlayLocked.Checked;
-    public int OverlayOpacity => _overlayOpacity.Value;
-    public bool AutoLaunchClaudeCode => _autoLaunchClaudeCode.Checked;
+    private static TabPage AboutTab()
+    {
+        var panel = Page();
+        var version = typeof(SettingsForm).Assembly.GetName().Version?.ToString(3) ?? "0.1.0";
+        panel.Controls.Add(new PictureBox { Image = AppIcon.Get().ToBitmap(), SizeMode = PictureBoxSizeMode.AutoSize });
+        panel.Controls.Add(Heading($"Claude Usage Tray {version}"));
+        panel.Controls.Add(Note("Shows the usage percentages Claude reports for your 5-hour and weekly limits. They come from " +
+                                "undocumented endpoints that may change or stop working at any time. The \"could run out by\" " +
+                                "time is this app's own estimate from recent readings."));
+        panel.Controls.Add(Note("Not affiliated with Anthropic."));
+        return Tab("About", panel);
+    }
+
+    // ---------- helpers ----------
+
+    private static FlowLayoutPanel Page() => new()
+    {
+        Dock = DockStyle.Fill,
+        FlowDirection = FlowDirection.TopDown,
+        WrapContents = false,
+        AutoScroll = true,
+        Padding = new Padding(8),
+    };
+
+    private static TabPage Tab(string text, Control content)
+    {
+        var page = new TabPage(text) { UseVisualStyleBackColor = true };
+        page.Controls.Add(content);
+        return page;
+    }
+
+    private static Label Heading(string text) => new()
+    {
+        AutoSize = true,
+        Text = text,
+        Font = new Font(SystemFonts.MessageBoxFont ?? Control.DefaultFont, FontStyle.Bold),
+        Margin = new Padding(3, 10, 3, 2),
+    };
+
+    private static Label Note(string text) => new()
+    {
+        AutoSize = true,
+        MaximumSize = new Size(ContentWidth, 0),
+        ForeColor = SystemColors.GrayText,
+        Text = text,
+        Margin = new Padding(3, 2, 3, 6),
+    };
+
+    private static ComboBox HourPicker()
+    {
+        var box = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 70 };
+        for (var h = 0; h < 24; h++) box.Items.Add($"{h:00}:00");
+        return box;
+    }
 }

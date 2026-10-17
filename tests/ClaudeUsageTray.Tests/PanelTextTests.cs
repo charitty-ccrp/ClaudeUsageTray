@@ -99,7 +99,7 @@ public class TooltipAndToastTests
         var text = UsageText.Tooltip(State(100, week: 100, opus: 100, stale: true), Now);
 
         Assert.True(text.Length <= 127, text);
-        Assert.Contains("STALE", text);
+        Assert.Contains("(last known)", text);
         Assert.Contains("Last update", text);
     }
 
@@ -203,7 +203,7 @@ public class PanelModelTests
     {
         var stale = Ok(10) with { IsStale = true, Error = UsageErrorKind.Network, NextAttemptAt = Now.AddSeconds(15) };
         var footer = PanelModelBuilder.Footer(stale, Now, false);
-        Assert.Contains("(STALE)", footer);
+        Assert.Contains("(last known value)", footer);
         Assert.EndsWith("retry in 15s", footer);
 
         var auth = Ok(10) with { IsStale = true, Error = UsageErrorKind.Authentication, NextAttemptAt = null };

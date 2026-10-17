@@ -9,6 +9,13 @@ internal static class Program
     [STAThread]
     private static void Main(string[] args)
     {
+        // build helper: regenerates the icon embedded in the .exe (assets/app.ico) from the same drawing code
+        if (args is ["--write-icon", var iconPath])
+        {
+            File.WriteAllBytes(iconPath, AppIcon.IcoBytes());
+            return;
+        }
+
         // single instance per user session
         using var mutex = new Mutex(initiallyOwned: true, AppConstants.MutexName, out var createdNew);
         if (!createdNew) return;

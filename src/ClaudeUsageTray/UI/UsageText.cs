@@ -16,25 +16,27 @@ internal static class UsageText
 
     public static string ShortError(UsageErrorKind kind) => kind switch
     {
-        UsageErrorKind.NotConfigured => "Not configured",
-        UsageErrorKind.Authentication => "Authentication required",
-        UsageErrorKind.Forbidden => "Access rejected",
-        UsageErrorKind.Server => "Service unavailable",
+        UsageErrorKind.NotConfigured => "Setup needed",
+        UsageErrorKind.Authentication => "Sign-in expired",
+        UsageErrorKind.Forbidden => "Access blocked",
+        UsageErrorKind.Server => "Claude is unavailable",
         UsageErrorKind.InvalidResponse => "Unexpected response",
-        UsageErrorKind.Network => "Network unavailable",
+        UsageErrorKind.Network => "No connection",
         UsageErrorKind.CredentialUnavailable => "Claude Code login needed",
+        UsageErrorKind.RateLimited => "Checking too often",
         _ => string.Empty,
     };
 
     public static string LongError(UsageErrorKind kind) => kind switch
     {
-        UsageErrorKind.NotConfigured => "Not configured. Open Settings to add your session credential.",
-        UsageErrorKind.Authentication => "Authentication required. Please update your session credential.",
-        UsageErrorKind.Forbidden => "Request rejected or access changed. Try again later or re-authenticate.",
-        UsageErrorKind.Server => "Service temporarily unavailable.",
-        UsageErrorKind.InvalidResponse => "Unexpected response format. The Claude usage endpoint may have changed.",
-        UsageErrorKind.Network => "Network unavailable.",
-        UsageErrorKind.CredentialUnavailable => "Claude Code login is missing or expired. This app can refresh it for you in the background (see Settings); if that does not help, use \"Sign in to Claude Code...\" from the tray menu.",
+        UsageErrorKind.NotConfigured => "Setup isn't finished. Open Settings and choose where usage comes from.",
+        UsageErrorKind.Authentication => "Your claude.ai sign-in expired. Open Settings and paste a new session cookie.",
+        UsageErrorKind.Forbidden => "Claude rejected the request. This app tries again in a few minutes.",
+        UsageErrorKind.Server => "Claude isn't responding right now. This app keeps trying.",
+        UsageErrorKind.InvalidResponse => "Claude sent something unexpected. The usage endpoint may have changed.",
+        UsageErrorKind.Network => "Can't reach Claude. Check your internet connection; this app keeps trying.",
+        UsageErrorKind.CredentialUnavailable => "Your Claude Code login is missing or expired. Open Claude Code or the Claude app once and this app reconnects by itself.",
+        UsageErrorKind.RateLimited => "Claude asked this app to slow down. It waits a few minutes and tries again.",
         _ => string.Empty,
     };
 
@@ -174,12 +176,12 @@ internal static class UsageText
         var head = $"Claude {UsageMath.DisplayUtilization(snapshot.FiveHour.Utilization)}%";
         if (snapshot.Usage.SevenDay is { } week)
             head += $" 5h · {UsageMath.DisplayUtilization(week.Utilization)}% wk";
-        if (state.IsStale) head += " STALE";
+        if (state.IsStale && !state.IsQuietFailure) head += " (last known)";
 
         var resetLine = $"Reset: {ResetText(state, now, false)}";
 
         var updated = state.LastSuccessfulUpdate is { } at ? TimeFormatter.FormatClock(at) : "--";
-        var updatedLabel = state.IsStale ? "Last update" : "Updated";
+        var updatedLabel = state.IsStale && !state.IsQuietFailure ? "Last update" : "Updated";
         return Truncate($"{head}\n{resetLine}\n{updatedLabel}: {updated}");
     }
 
