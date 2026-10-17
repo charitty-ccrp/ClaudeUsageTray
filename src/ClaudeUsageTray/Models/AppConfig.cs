@@ -55,6 +55,13 @@ public sealed class AppConfig
     [JsonPropertyName("autoLaunchClaudeCode")]
     public bool AutoLaunchClaudeCode { get; set; } = true;
 
+    /// <summary>Once a day, ask GitHub whether a newer release exists (only shows a menu item; never installs).</summary>
+    [JsonPropertyName("checkForUpdates")]
+    public bool CheckForUpdates { get; set; } = true;
+
+    [JsonPropertyName("lastUpdateCheck")]
+    public DateTimeOffset? LastUpdateCheck { get; set; }
+
     [JsonPropertyName("disclaimerAccepted")]
     public bool DisclaimerAccepted { get; set; }
 

@@ -18,6 +18,7 @@ internal sealed class SettingsForm : Form
 
     private readonly ComboBox _polling = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 200 };
     private readonly CheckBox _startup = new() { AutoSize = true, Text = "Start with Windows" };
+    private readonly CheckBox _updates = new() { AutoSize = true, Text = "Tell me when a new version is available" };
     private readonly CheckBox _autoLaunchClaudeCode = new()
     {
         AutoSize = true,
@@ -100,6 +101,7 @@ internal sealed class SettingsForm : Form
     {
         config.PollingMode = PollingChoices[Math.Max(0, _polling.SelectedIndex)].Mode;
         config.StartWithWindows = _startup.Checked;
+        config.CheckForUpdates = _updates.Checked;
         if (_autoLaunchClaudeCode.Enabled) config.AutoLaunchClaudeCode = _autoLaunchClaudeCode.Checked; // keep the choice while the CLI is missing
         config.NotificationsEnabled = _notify.Checked;
         config.NotifyWarning = _notifyWarning.Checked;
@@ -179,6 +181,9 @@ internal sealed class SettingsForm : Form
         _startup.Checked = startupEnabled;
         _startup.Margin = new Padding(3, 12, 3, 3);
         panel.Controls.Add(_startup);
+
+        _updates.Checked = config.CheckForUpdates;
+        panel.Controls.Add(_updates);
 
         return Tab("General", panel);
     }

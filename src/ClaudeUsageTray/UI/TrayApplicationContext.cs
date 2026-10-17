@@ -29,6 +29,12 @@ internal sealed class TrayApplicationContext : ApplicationContext
     private readonly PollingSchedule _schedule;
     private DebouncedFileWatcher? _activityWatcher;
     private DebouncedFileWatcher? _credentialsWatcher;
+
+    private readonly UpdateChecker _updates = new();
+    private readonly ToolStripMenuItem _updateItem = new() { Visible = false };
+    private readonly DateTime _startedUtc = DateTime.UtcNow;
+    private UpdateInfo? _update;
+    private bool _updateCheckRunning;
     private readonly UsageForm _popup = new();
     private readonly System.Windows.Forms.Timer _timer = new() { Interval = 1000 };
 
@@ -101,6 +107,8 @@ internal sealed class TrayApplicationContext : ApplicationContext
         _menu.Items.Add(_signInItem);
         SyncSignInMenuItem();
 
+        _updateItem.Click += (_, _) => { if (_update is { } u) OpenUrl(u.ReleasePage.AbsoluteUri); };
+        _menu.Items.Add(_updateItem);
         _menu.Items.Add("Open Claude", null, (_, _) => OpenClaude());
         _menu.Items.Add("Settings...", null, (_, _) => ShowSettings());
         _menu.Items.Add("Copy diagnostics", null, (_, _) => CopyDiagnostics());
@@ -117,7 +125,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
         _notifyIcon = new NotifyIcon { ContextMenuStrip = _menu, Visible = true };
         _notifyIcon.MouseClick += (_, e) => { if (e.Button == MouseButtons.Left) TogglePopup(); };
 
-        _timer.Tick += (_, _) => { _service.Tick(); RefreshUi(); };
+        _timer.Tick += (_, _) => { _service.Tick(); RefreshUi(); MaybeCheckForUpdates(); };
         _timer.Start();
 
         if (!mock) StartWatchers();
@@ -486,11 +494,37 @@ internal sealed class TrayApplicationContext : ApplicationContext
         return true;
     }
 
-    private static void OpenClaude()
+    /// <summary>Once a day (first check a minute after start), off the UI thread; failures are silent.</summary>
+    private async void MaybeCheckForUpdates()
+    {
+        if (_mock || _updateCheckRunning || !_config.CheckForUpdates) return;
+        if (DateTime.UtcNow - _startedUtc < TimeSpan.FromMinutes(1)) return;
+        if (_config.LastUpdateCheck is { } last && DateTimeOffset.UtcNow - last < UpdateChecker.Interval) return;
+
+        _updateCheckRunning = true;
+        try
+        {
+            _config.LastUpdateCheck = DateTimeOffset.UtcNow;
+            SaveConfigQuietly();
+            _update = await _updates.CheckAsync(UpdateChecker.CurrentVersion, CancellationToken.None);
+            if (_cleanedUp || _update is null) return;
+            _updateItem.Text = $"Update available: {_update.Tag}...";
+            _updateItem.Visible = true;
+            Logger.Info($"Update available: {_update.Tag}");
+        }
+        finally
+        {
+            _updateCheckRunning = false;
+        }
+    }
+
+    private static void OpenClaude() => OpenUrl(AppConstants.ClaudeHomeUrl);
+
+    private static void OpenUrl(string url)
     {
         try
         {
-            Process.Start(new ProcessStartInfo(AppConstants.ClaudeHomeUrl) { UseShellExecute = true });
+            Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
         }
         catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException)
         {
@@ -626,6 +660,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
         _service.StateChanged -= OnStateChanged;
         _service.RefreshingChanged -= OnRefreshingChanged;
         _service.Dispose();
+        _updates.Dispose();
         _client?.Dispose();
         _oauthClient?.Dispose();
 
