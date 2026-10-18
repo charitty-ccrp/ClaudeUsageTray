@@ -16,6 +16,7 @@ internal sealed class SettingsForm : Form
         (PollingMode.Saver, "Saver", "Every 3 min while you use Claude Code, every 30 min otherwise."),
     ];
 
+    private readonly TabControl _tabs = new() { Width = ContentWidth + 40, Height = 410 };
     private readonly ComboBox _polling = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 200 };
     private readonly CheckBox _startup = new() { AutoSize = true, Text = "Start with Windows" };
     private readonly CheckBox _shortcuts = new() { AutoSize = true, Text = "Shortcuts on the Start menu and desktop" };
@@ -78,7 +79,7 @@ internal sealed class SettingsForm : Form
         AutoSize = true;
         AutoSizeMode = AutoSizeMode.GrowAndShrink;
 
-        var tabs = new TabControl { Width = ContentWidth + 40, Height = 410 };
+        var tabs = _tabs;
         tabs.TabPages.Add(GeneralTab(config, startupEnabled, credentialAgeDays, updateCredential, removeCredential,
             credentialAvailable, mode, claudeCliAvailable));
         tabs.TabPages.Add(NotificationsTab(config));
@@ -103,6 +104,29 @@ internal sealed class SettingsForm : Form
 
         AcceptButton = ok;
         CancelButton = cancel;
+    }
+
+    protected override void OnLoad(EventArgs e)
+    {
+        base.OnLoad(e);
+        FitTabsToContent();
+    }
+
+    /// <summary>
+    /// Makes the tabs tall enough for the longest page, so nothing needs scrolling. Done after load, when DPI scaling
+    /// has been applied and the real text sizes are known. Only if the screen is too short does a page keep its scroll bar.
+    /// </summary>
+    private void FitTabsToContent()
+    {
+        var display = _tabs.DisplayRectangle;
+        var chrome = _tabs.Height - display.Height; // tab headers and borders
+        var needed = _tabs.TabPages.Cast<TabPage>()
+            .SelectMany(page => page.Controls.Cast<Control>())
+            .Max(content => content.GetPreferredSize(new Size(display.Width, 0)).Height);
+
+        var screenRoom = Screen.FromControl(this).WorkingArea.Height - (Height - _tabs.Height);
+        _tabs.Height = Math.Min(needed + chrome + LogicalToDeviceUnits(4), screenRoom);
+        if (Bottom > Screen.FromControl(this).WorkingArea.Bottom) CenterToScreen();
     }
 
     /// <summary>Copies the user's choices into <paramref name="config"/>.</summary>
