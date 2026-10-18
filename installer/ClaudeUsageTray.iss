@@ -13,6 +13,7 @@ AppName=Claude Usage Tray
 AppVersion={#AppVersion}
 VersionInfoVersion={#AppVersion}
 AppPublisher=charitty-ccrp
+AppCopyright=Copyright (c) 2026 Charittiporn Chamcharoenporn. MIT License.
 AppPublisherURL=https://github.com/charitty-ccrp/ClaudeUsageTray
 AppSupportURL=https://github.com/charitty-ccrp/ClaudeUsageTray/issues
 DefaultDirName={localappdata}\Programs\ClaudeUsageTray

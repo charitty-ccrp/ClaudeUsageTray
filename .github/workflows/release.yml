@@ -43,7 +43,8 @@ jobs:
 
           # checksums so users can check their download (Get-FileHash prints the same SHA256)
           $sums = foreach ($f in $files) { "{0}  {1}" -f (Get-FileHash $f -Algorithm SHA256).Hash.ToLowerInvariant(), (Split-Path $f -Leaf) }
-          $sums | Set-Content -Encoding ascii artifacts\SHA256SUMS.txt
+          # LF line endings, so "sha256sum -c SHA256SUMS.txt" works on Linux and Git Bash too
+          [IO.File]::WriteAllText((Join-Path $PWD 'artifacts\SHA256SUMS.txt'), ($sums -join "`n") + "`n")
           Get-Content artifacts\SHA256SUMS.txt
 
       - name: Keep the dry-run files
