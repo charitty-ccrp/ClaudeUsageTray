@@ -157,4 +157,22 @@ public class StartupManagerTests
         Assert.True(manager.SetEnabled(false));
         Assert.False(manager.IsEnabled);
     }
+
+    [Fact]
+    public void Start_menu_and_desktop_shortcuts_are_created_and_removed_together()
+    {
+        using var startMenu = new TempDir();
+        using var desktop = new TempDir();
+        var shortcuts = new AppShortcuts(startMenu.Path, desktop.Path, Environment.ProcessPath);
+
+        Assert.False(shortcuts.Exist);
+        Assert.True(shortcuts.SetEnabled(true));
+        Assert.True(shortcuts.Exist);
+        Assert.True(File.Exists(Path.Combine(startMenu.Path, "Claude Usage Tray.lnk")));
+        Assert.True(File.Exists(Path.Combine(desktop.Path, "Claude Usage Tray.lnk")));
+
+        Assert.True(shortcuts.SetEnabled(false));
+        Assert.False(shortcuts.Exist);
+        Assert.Empty(Directory.GetFiles(desktop.Path));
+    }
 }

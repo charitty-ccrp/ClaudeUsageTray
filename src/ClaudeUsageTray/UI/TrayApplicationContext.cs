@@ -14,6 +14,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
     private readonly ConfigStore _configStore = new();
     private readonly CredentialStore _credentialStore = new();
     private readonly StartupManager _startup = new();
+    private readonly AppShortcuts _shortcuts = new();
     private readonly ClaudeUsageClient? _client;
     private readonly ClaudeCodeOAuthClient? _oauthClient;
     private readonly UsageService _service;
@@ -147,11 +148,18 @@ internal sealed class TrayApplicationContext : ApplicationContext
         ApplyOverlayState(replace: true);
 
         var needsSetup = _config.AuthMode == AuthMode.ClaudeCodeOAuth ? !_config.DisclaimerAccepted : _sessionKey is null;
-        if (!mock && needsSetup)
+        var offerShortcuts = !mock && !_config.ShortcutsOffered && !_shortcuts.Exist;
+        if (!mock && (needsSetup || offerShortcuts))
         {
-            // first run: open setup once the message loop is running
+            // first run: open setup, then offer shortcuts, once the message loop is running
             var first = new System.Windows.Forms.Timer { Interval = 300 };
-            first.Tick += (_, _) => { first.Stop(); first.Dispose(); ShowSetup(); };
+            first.Tick += (_, _) =>
+            {
+                first.Stop();
+                first.Dispose();
+                if (needsSetup) ShowSetup();
+                if (offerShortcuts) OfferShortcuts();
+            };
             first.Start();
         }
     }
@@ -431,7 +439,8 @@ internal sealed class TrayApplicationContext : ApplicationContext
             mode: _config.AuthMode,
             claudeCliAvailable: _claudeCodeAutoLauncher.IsAvailable,
             previewOverlayOpacity: percent => { if (_overlay is { } overlay) Guard("opacity", () => overlay.OpacityPercent = percent); },
-            resetOverlayPosition: () => UpdateOverlayConfig(c => { c.OverlayX = null; c.OverlayY = null; }, replace: true));
+            resetOverlayPosition: () => UpdateOverlayConfig(c => { c.OverlayX = null; c.OverlayY = null; }, replace: true),
+            shortcutsExist: _shortcuts.Exist);
         _openDialog = form;
         try
         {
@@ -447,6 +456,9 @@ internal sealed class TrayApplicationContext : ApplicationContext
                 _config.StartWithWindows = _startup.IsEnabled;
                 MessageBox.Show("Could not change the Startup shortcut.", "Claude Usage", MessageBoxButtons.OK, MessageBoxIcon.Warning);
             }
+            if (form.Shortcuts != _shortcuts.Exist && !_shortcuts.SetEnabled(form.Shortcuts))
+                MessageBox.Show("Could not change the Start menu and desktop shortcuts.", "Claude Usage", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            _config.ShortcutsOffered = true;
             _configStore.Save(_config);
             ApplyOverlayState();
             ResetEstimate();
@@ -485,6 +497,25 @@ internal sealed class TrayApplicationContext : ApplicationContext
         {
             _openDialog = previous;
         }
+    }
+
+    /// <summary>
+    /// Asked once: the portable .exe has no installer, so offer the Start menu and desktop shortcuts an installed program
+    /// would have. Skipped when the installer already made them. Can be changed later in Settings.
+    /// </summary>
+    private void OfferShortcuts()
+    {
+        if (_cleanedUp || _openDialog is not null) return;
+        _config.ShortcutsOffered = true;
+        SaveConfigQuietly();
+
+        var answer = MessageBox.Show(
+            "Add Claude Usage Tray to the Start menu and the desktop, so you can open it like any other program?\n\n" +
+            "The shortcuts point to this file, so keep it where it is:\n" + Environment.ProcessPath +
+            "\n\nYou can change this later in Settings.",
+            "Claude Usage", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+        if (answer == DialogResult.Yes && !_shortcuts.SetEnabled(true))
+            MessageBox.Show("Could not create the shortcuts.", "Claude Usage", MessageBoxButtons.OK, MessageBoxIcon.Warning);
     }
 
     private void RemoveCredential()

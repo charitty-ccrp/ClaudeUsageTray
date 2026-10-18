@@ -5,16 +5,19 @@ using ClaudeUsageTray.Utilities;
 
 namespace ClaudeUsageTray.Services;
 
-/// <summary>Creates/removes a shortcut in the per-user Startup folder (no Admin, no registry). Uses declared COM interfaces, not dynamic.</summary>
+/// <summary>
+/// Creates/removes a shortcut to this app in a folder: the per-user Startup folder by default, or any other folder
+/// (Start menu, desktop) with a <c>shortcutName</c>. No Admin, no registry. Uses declared COM interfaces, not dynamic.
+/// </summary>
 public sealed class StartupManager
 {
     private readonly string _shortcutPath;
     private readonly string? _target;
 
-    public StartupManager(string? startupFolder = null, string? targetExe = null)
+    public StartupManager(string? startupFolder = null, string? targetExe = null, string? shortcutName = null)
     {
         var folder = startupFolder ?? Environment.GetFolderPath(Environment.SpecialFolder.Startup);
-        _shortcutPath = Path.Combine(folder, AppConstants.AppName + ".lnk");
+        _shortcutPath = Path.Combine(folder, (shortcutName ?? AppConstants.AppName) + ".lnk");
         _target = targetExe ?? Environment.ProcessPath;
     }
 
@@ -49,6 +52,7 @@ public sealed class StartupManager
             link.SetPath(target);
             link.SetWorkingDirectory(Path.GetDirectoryName(target) ?? string.Empty);
             link.SetDescription("Claude 5-hour usage tray monitor");
+            link.SetIconLocation(target, 0);
             ((IPersistFile)link).Save(shortcutPath, true);
         }
         finally

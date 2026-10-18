@@ -66,6 +66,10 @@ public sealed class AppConfig
     [JsonPropertyName("lastUpdateCheck")]
     public DateTimeOffset? LastUpdateCheck { get; set; }
 
+    /// <summary>Set once the app has asked (on first run) whether to add Start menu and desktop shortcuts.</summary>
+    [JsonPropertyName("shortcutsOffered")]
+    public bool ShortcutsOffered { get; set; }
+
     [JsonPropertyName("disclaimerAccepted")]
     public bool DisclaimerAccepted { get; set; }
 

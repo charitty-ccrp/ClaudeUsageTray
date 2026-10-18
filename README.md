@@ -15,6 +15,12 @@ A small Windows tray app that shows how much of your Claude **5-hour** and **wee
 
 There is also a portable `ClaudeUsageTray-<version>-portable.exe` that runs without installing. Neither download needs .NET installed.
 
+### Portable .exe (no installer)
+
+Put `ClaudeUsageTray.exe` in a folder you'll keep (for example Documents) and double-click it. On first run it asks whether to add **Start menu and desktop shortcuts**, so it opens like any installed program; you can change this later in Settings > General, next to **Start with Windows**. The shortcuts point to the file, so don't move it afterwards.
+
+To build the portable .exe yourself, double-click `build-portable.cmd` (needs the .NET 10 SDK). It opens Explorer on `artifacts\publish\ClaudeUsageTray.exe` when done.
+
 ## Where the numbers come from
 
 | Source | When to use it |

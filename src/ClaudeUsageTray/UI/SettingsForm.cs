@@ -18,6 +18,7 @@ internal sealed class SettingsForm : Form
 
     private readonly ComboBox _polling = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 200 };
     private readonly CheckBox _startup = new() { AutoSize = true, Text = "Start with Windows" };
+    private readonly CheckBox _shortcuts = new() { AutoSize = true, Text = "Shortcuts on the Start menu and desktop" };
     private readonly CheckBox _updates = new() { AutoSize = true, Text = "Tell me when a new version is available" };
     private readonly CheckBox _autoLaunchClaudeCode = new()
     {
@@ -64,8 +65,9 @@ internal sealed class SettingsForm : Form
 
     public SettingsForm(AppConfig config, bool startupEnabled, int? credentialAgeDays,
         Func<bool> updateCredential, Action removeCredential, bool credentialAvailable, AuthMode mode,
-        bool claudeCliAvailable, Action<int> previewOverlayOpacity, Action resetOverlayPosition)
+        bool claudeCliAvailable, Action<int> previewOverlayOpacity, Action resetOverlayPosition, bool shortcutsExist = false)
     {
+        _shortcuts.Checked = shortcutsExist;
         Text = "Claude Usage - Settings";
         Icon = AppIcon.Get();
         FormBorderStyle = FormBorderStyle.FixedDialog;
@@ -126,6 +128,8 @@ internal sealed class SettingsForm : Form
     }
 
     public bool StartWithWindows => _startup.Checked;
+
+    public bool Shortcuts => _shortcuts.Checked;
 
     // ---------- tabs ----------
 
@@ -195,6 +199,7 @@ internal sealed class SettingsForm : Form
         _startup.Checked = startupEnabled;
         _startup.Margin = new Padding(3, 12, 3, 3);
         panel.Controls.Add(_startup);
+        panel.Controls.Add(_shortcuts);
 
         _updates.Checked = config.CheckForUpdates;
         panel.Controls.Add(_updates);
