@@ -28,12 +28,15 @@ internal sealed record PanelModel(
     public string? ShortStatus { get; init; }
 
     public bool IsStale { get; init; }
+
+    /// <summary>"≈ 61% (est.) ..." under the 5-hour bar between real polls; null when off or there is nothing to add.</summary>
+    public string? EstimateLine { get; init; }
 }
 
 internal static class PanelModelBuilder
 {
     public static PanelModel Build(UsageState state, DateTimeOffset now, BurnRateTracker tracker, string badge,
-        int? credentialAgeDays, bool refreshing)
+        int? credentialAgeDays, bool refreshing, int? estimatePercent = null)
     {
         WindowRow? primary = null;
         var others = new List<WindowRow>();
@@ -66,6 +69,7 @@ internal static class PanelModelBuilder
         {
             ShortStatus = state.Error == UsageErrorKind.None || state.IsQuietFailure ? null : UsageText.ShortError(state.Error),
             IsStale = state.IsStale && !state.IsQuietFailure,
+            EstimateLine = primary is null ? null : UsageText.EstimateLine(primary.Percent, estimatePercent),
         };
         return model with { Signature = Sign(model) };
     }
@@ -118,6 +122,6 @@ internal static class PanelModelBuilder
     {
         static string Row(WindowRow? r) => r is null ? "-" : $"{r.Key}:{r.Percent}:{r.Level}:{r.Detail}";
         return string.Join('', m.Title, m.Badge, Row(m.Primary), m.BurnLine, m.BurnWarn, string.Join('', m.Others.Select(Row)),
-            m.Status, m.Tone, m.Footer, m.ShortStatus, m.IsStale);
+            m.Status, m.Tone, m.Footer, m.ShortStatus, m.IsStale, m.EstimateLine);
     }
 }

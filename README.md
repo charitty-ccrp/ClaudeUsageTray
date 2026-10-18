@@ -4,6 +4,7 @@ A small Windows tray app that shows how much of your Claude **5-hour** and **wee
 
 - The tray icon is a ring that fills up and changes colour: green, then yellow at 70%, orange at 85% and red at 95%. The number sits inside the ring.
 - Click the icon for details: when the limit resets, the weekly bars, and a "could run out by" estimate.
+- Optional (Settings > General, off by default): between checks, a clearly labelled "≈ 61% (est.)" scaled from the tokens in your local Claude Code transcripts. The icon colour and notifications always use Claude's real figure.
 - Optional notifications when usage crosses 70%, 85% or 95%, and when a limit resets. Quiet hours can hold them back.
 - An optional always-on-top desktop overlay.
 

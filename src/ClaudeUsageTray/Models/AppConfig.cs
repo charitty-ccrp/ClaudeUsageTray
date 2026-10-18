@@ -59,6 +59,10 @@ public sealed class AppConfig
     [JsonPropertyName("checkForUpdates")]
     public bool CheckForUpdates { get; set; } = true;
 
+    /// <summary>Between real polls, show a clearly labelled estimate from local Claude Code transcripts. Display only.</summary>
+    [JsonPropertyName("showLocalEstimate")]
+    public bool ShowLocalEstimate { get; set; }
+
     [JsonPropertyName("lastUpdateCheck")]
     public DateTimeOffset? LastUpdateCheck { get; set; }
 

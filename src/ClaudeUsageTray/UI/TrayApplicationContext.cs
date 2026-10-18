@@ -30,6 +30,12 @@ internal sealed class TrayApplicationContext : ApplicationContext
     private DebouncedFileWatcher? _activityWatcher;
     private DebouncedFileWatcher? _credentialsWatcher;
 
+    // optional, display-only estimate between real polls (Settings > General); never feeds the icon or notifications
+    private readonly TranscriptUsageLog _transcripts = new(Path.Combine(ClaudeDir, "projects"));
+    private readonly object _estimateLock = new();
+    private EstimateBaseline? _estimateBaseline;
+    private int? _estimatePercent;
+
     private readonly UpdateChecker _updates = new();
     private readonly ToolStripMenuItem _updateItem = new() { Visible = false };
     private readonly DateTime _startedUtc = DateTime.UtcNow;
@@ -128,7 +134,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
         _timer.Tick += (_, _) => { _service.Tick(); RefreshUi(); MaybeCheckForUpdates(); };
         _timer.Start();
 
-        if (!mock) StartWatchers();
+        StartWatchers();
 
         SystemEvents.PowerModeChanged += OnPowerModeChanged;
         SystemEvents.SessionSwitch += OnSessionSwitch;
@@ -154,6 +160,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
     {
         _state = state;
         Notify(state);
+        OnRealReading(state);
         RefreshUi();
         MaybeAutoLaunchClaudeCode(state);
     }
@@ -247,7 +254,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
             _iconKey = key;
         }
 
-        _notifyIcon.Text = UsageText.Tooltip(_state, now);
+        _notifyIcon.Text = UsageText.Tooltip(_state, now, CurrentEstimate(now));
 
         var fiveHour = snapshot?.FiveHour;
         _usageItem.Text = fiveHour is null
@@ -388,7 +395,8 @@ internal sealed class TrayApplicationContext : ApplicationContext
         PostToUi(() => Guard("display change", () => { if (_overlay is { } overlay) overlay.PlaceAt(overlay.Location.X, overlay.Location.Y); }));
 
     private PanelModel BuildModel(DateTimeOffset now) =>
-        PanelModelBuilder.Build(_state, now, _service.BurnRates, SourceBadge(), CredentialAgeDays(), _service.IsRefreshing);
+        PanelModelBuilder.Build(_state, now, _service.BurnRates, SourceBadge(), CredentialAgeDays(), _service.IsRefreshing,
+            CurrentEstimate(now));
 
     private string SourceBadge() =>
         _mock ? "Mock data" : _config.AuthMode == AuthMode.ClaudeCodeOAuth ? "Claude Code" : "Cookie";
@@ -441,6 +449,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
             }
             _configStore.Save(_config);
             ApplyOverlayState();
+            ResetEstimate();
             _service.RequestRefresh();
         }
         finally
@@ -559,13 +568,17 @@ internal sealed class TrayApplicationContext : ApplicationContext
             _service.Paused = false;
     }
 
+    private static string ClaudeDir => Path.GetDirectoryName(ClaudeCodeOAuthClient.DefaultCredentialsPath)!;
+
     private void StartWatchers()
     {
-        var claudeDir = Path.GetDirectoryName(ClaudeCodeOAuthClient.DefaultCredentialsPath)!;
+        var claudeDir = ClaudeDir;
 
         // Claude Code writes its transcripts as you use it: that is when usage moves, so poll more often then
+        // (with --mock it only drives the local estimate, so the estimate can be seen without a real account)
         _activityWatcher = new DebouncedFileWatcher(Path.Combine(claudeDir, "projects"), "*.jsonl",
             includeSubdirectories: true, delay: TimeSpan.FromSeconds(20), OnLocalActivity);
+        if (_mock) return;
 
         // Claude Code (or the Claude app) rewrites this file when it renews the login: recover right away
         _credentialsWatcher = new DebouncedFileWatcher(claudeDir, Path.GetFileName(ClaudeCodeOAuthClient.DefaultCredentialsPath),
@@ -580,9 +593,80 @@ internal sealed class TrayApplicationContext : ApplicationContext
     private void OnLocalActivity()
     {
         var now = DateTimeOffset.UtcNow;
-        _schedule.RecordActivity(now);
-        if (!_service.Paused && _schedule.ShouldRefreshOnActivity(_service.State.LastSuccessfulUpdate, now))
-            _service.RequestRefresh();
+        if (!_mock)
+        {
+            _schedule.RecordActivity(now);
+            if (!_service.Paused && _schedule.ShouldRefreshOnActivity(_service.State.LastSuccessfulUpdate, now))
+                _service.RequestRefresh();
+        }
+        UpdateEstimate(); // already on a thread-pool thread
+    }
+
+    // ---------- local estimate between polls ----------
+
+    /// <summary>The estimate to show right now, or null. Only while the real value it was scaled from is still on screen.</summary>
+    private int? CurrentEstimate(DateTimeOffset now)
+    {
+        if (!_config.ShowLocalEstimate || _state.Snapshot is not { } snapshot || (_state.IsStale && !_state.IsQuietFailure)) return null;
+        lock (_estimateLock)
+        {
+            if (_estimateBaseline is not { } baseline || baseline.ReadingAt != snapshot.FetchedAt || now >= baseline.WindowEnd) return null;
+            return _estimatePercent;
+        }
+    }
+
+    /// <summary>A new real reading replaces the estimate; the transcripts are re-read off the UI thread to set the next baseline.</summary>
+    private void OnRealReading(UsageState state)
+    {
+        if (!_config.ShowLocalEstimate || state.Snapshot is not { } snapshot || state.IsStale) return;
+        lock (_estimateLock)
+        {
+            if (_estimateBaseline?.ReadingAt == snapshot.FetchedAt) return;
+            _estimateBaseline = null;
+            _estimatePercent = null;
+        }
+        _ = Task.Run(() =>
+        {
+            var reading = snapshot.FiveHour;
+            if (reading.ResetsAt is { } end) _transcripts.Scan(end - LocalUsageEstimator.WindowLength);
+            var baseline = LocalUsageEstimator.Baseline(reading.Utilization, reading.ResetsAt, snapshot.FetchedAt, _transcripts.WeightBetween);
+            lock (_estimateLock)
+            {
+                // a newer reading may have arrived while this one was scanning
+                if (_state.Snapshot?.FetchedAt == snapshot.FetchedAt) _estimateBaseline = baseline;
+            }
+        });
+    }
+
+    private void UpdateEstimate()
+    {
+        if (!_config.ShowLocalEstimate) return;
+        EstimateBaseline? baseline;
+        lock (_estimateLock) baseline = _estimateBaseline;
+        if (baseline is null) return;
+
+        var now = DateTimeOffset.UtcNow;
+        _transcripts.Scan(baseline.WindowStart);
+        var estimate = LocalUsageEstimator.Estimate(baseline, _transcripts.WeightBetween(baseline.WindowStart, now), now);
+        int? percent = estimate is { } e ? UsageMath.DisplayUtilization(e) : null;
+        lock (_estimateLock)
+        {
+            if (!ReferenceEquals(_estimateBaseline, baseline) || _estimatePercent == percent) return;
+            _estimatePercent = percent;
+        }
+        if (percent is not null) Logger.Info($"Local estimate ≈{percent}% (real reading {UsageMath.DisplayUtilization(baseline.Percent)}%)");
+        PostToUi(RefreshUi);
+    }
+
+    /// <summary>After Settings change: drop any estimate and, when on, start from the value on screen.</summary>
+    private void ResetEstimate()
+    {
+        lock (_estimateLock)
+        {
+            _estimateBaseline = null;
+            _estimatePercent = null;
+        }
+        OnRealReading(_state);
     }
 
     private void CopyDiagnostics()

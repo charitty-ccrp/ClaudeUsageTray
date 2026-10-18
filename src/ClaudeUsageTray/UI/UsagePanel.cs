@@ -127,6 +127,13 @@ internal sealed class UsagePanel : Control
                 y += Px(18);
             }
 
+            if (m.EstimateLine is { } estimate)
+            {
+                var height = TextRenderer.MeasureText(estimate, _body, new Size(inner, int.MaxValue), WrapFlags).Height;
+                if (g is not null) PanelPainter.DrawLine(g, estimate, _body, Theme.Muted, new Rectangle(pad, y, inner, height), WrapFlags);
+                y += height + Px(2);
+            }
+
             if (m.BurnLine is { } burn)
             {
                 var height = TextRenderer.MeasureText(burn, _body, new Size(inner, int.MaxValue), WrapFlags).Height;

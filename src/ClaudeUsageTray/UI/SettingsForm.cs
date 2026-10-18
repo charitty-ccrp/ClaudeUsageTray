@@ -26,6 +26,13 @@ internal sealed class SettingsForm : Form
         Text = "When Claude Code's login expires, refresh it automatically (runs \"claude update\" in a window that closes itself)",
     };
 
+    private readonly CheckBox _localEstimate = new()
+    {
+        AutoSize = true,
+        MaximumSize = new Size(ContentWidth, 0),
+        Text = "Between checks, show an estimate from local Claude Code use",
+    };
+
     private readonly CheckBox _notify = new() { AutoSize = true, Text = "Show notifications" };
     private readonly CheckBox _notifyWarning = new() { AutoSize = true, Text = "When usage reaches 70% (yellow)" };
     private readonly CheckBox _notifyHigh = new() { AutoSize = true, Text = "When usage reaches 85% (orange)" };
@@ -102,6 +109,7 @@ internal sealed class SettingsForm : Form
         config.PollingMode = PollingChoices[Math.Max(0, _polling.SelectedIndex)].Mode;
         config.StartWithWindows = _startup.Checked;
         config.CheckForUpdates = _updates.Checked;
+        config.ShowLocalEstimate = _localEstimate.Checked;
         if (_autoLaunchClaudeCode.Enabled) config.AutoLaunchClaudeCode = _autoLaunchClaudeCode.Checked; // keep the choice while the CLI is missing
         config.NotificationsEnabled = _notify.Checked;
         config.NotifyWarning = _notifyWarning.Checked;
@@ -177,6 +185,12 @@ internal sealed class SettingsForm : Form
         _polling.SelectedIndex = Math.Max(0, Array.FindIndex(PollingChoices, c => c.Mode == config.PollingMode));
         panel.Controls.Add(_polling);
         panel.Controls.Add(pollingDetail);
+
+        _localEstimate.Checked = config.ShowLocalEstimate;
+        panel.Controls.Add(WrapText.Fit(_localEstimate, ContentWidth));
+        panel.Controls.Add(Note("Shown as \"≈ 61% (est.)\" until the next real check. It scales Claude's last reading by the " +
+                                "tokens in this PC's Claude Code transcripts, so it misses claude.ai and other devices. " +
+                                "The icon and notifications always use Claude's real figure."));
 
         _startup.Checked = startupEnabled;
         _startup.Margin = new Padding(3, 12, 3, 3);

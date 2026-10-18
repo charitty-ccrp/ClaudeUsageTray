@@ -119,6 +119,10 @@ internal static class UsageText
         return ($"{rate} - could run out by {clock}", true);
     }
 
+    /// <summary>The between-polls estimate, always labelled; null unless it is above the real figure.</summary>
+    public static string? EstimateLine(int realPercent, int? estimatePercent) =>
+        estimatePercent is { } est && est > realPercent ? $"≈ {est}% (est.) from local Claude Code use since the last check" : null;
+
     public static string Countdown(TimeSpan span) =>
         span.TotalSeconds < 120 ? $"{Math.Max(1, (int)Math.Ceiling(span.TotalSeconds))}s" : $"{(int)Math.Ceiling(span.TotalMinutes)}m";
 
@@ -163,7 +167,7 @@ internal static class UsageText
 
     // ---------- tray tooltip ----------
 
-    public static string Tooltip(UsageState state, DateTimeOffset now)
+    public static string Tooltip(UsageState state, DateTimeOffset now, int? estimatePercent = null)
     {
         var snapshot = state.Snapshot;
         if (snapshot is null)
@@ -179,6 +183,8 @@ internal static class UsageText
         if (state.IsStale && !state.IsQuietFailure) head += " (last known)";
 
         var resetLine = $"Reset: {ResetText(state, now, false)}";
+        if (estimatePercent is { } est && est > UsageMath.DisplayUtilization(snapshot.FiveHour.Utilization))
+            resetLine = $"≈ {est}% (est.) · {resetLine}";
 
         var updated = state.LastSuccessfulUpdate is { } at ? TimeFormatter.FormatClock(at) : "--";
         var updatedLabel = state.IsStale && !state.IsQuietFailure ? "Last update" : "Updated";
