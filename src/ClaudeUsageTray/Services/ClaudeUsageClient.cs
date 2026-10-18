@@ -66,7 +66,7 @@ public sealed partial class ClaudeUsageClient : IUsageProvider, IDisposable
 
         var raw = await GetJsonAsync($"/api/organizations/{org}/usage", key, cancellationToken).ConfigureAwait(false);
         if (raw.Error != UsageErrorKind.None || raw.Body is null)
-            return UsageFetchResult.Fail(raw.Error, raw.Message ?? "Request failed.");
+            return UsageFetchResult.Fail(raw.Error, raw.Message ?? "Request failed.", raw.RetryAfter);
 
         return ParseUsage(raw.Body);
     }

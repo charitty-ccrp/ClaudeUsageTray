@@ -39,7 +39,7 @@ public class UsageServiceTests
     {
         var previous = SynchronizationContext.Current;
         SynchronizationContext.SetSynchronizationContext(null);
-        try { return new UsageService(provider, () => TimeSpan.FromSeconds(60), () => Now); }
+        try { return new UsageService(provider, () => TimeSpan.FromSeconds(60), () => Now, jitter: d => d); }
         finally { SynchronizationContext.SetSynchronizationContext(previous); }
     }
 
@@ -189,7 +189,7 @@ public class UsageTextTests
     {
         var text = UsageText.Tooltip(StateWith(63, Now.AddHours(1), stale: true, error: UsageErrorKind.Network), Now);
 
-        Assert.Contains("STALE", text);
+        Assert.Contains("(last known)", text);
         Assert.Contains("Last update:", text);
     }
 
@@ -198,7 +198,7 @@ public class UsageTextTests
     {
         var text = UsageText.Tooltip(new UsageState(null, false, UsageErrorKind.Authentication, "x", null, null), Now);
 
-        Assert.Equal("Claude --\nAuthentication required", text);
+        Assert.Equal("Claude --\nSign-in expired", text);
     }
 
     [Fact]

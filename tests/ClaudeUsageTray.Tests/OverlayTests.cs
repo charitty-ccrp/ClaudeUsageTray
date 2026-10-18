@@ -95,7 +95,7 @@ public class OverlayConfigTests
         var config = new ConfigStore(path).Load();
 
         Assert.Equal(AuthMode.ClaudeCodeOAuth, config.AuthMode);
-        Assert.Equal(120, config.RefreshIntervalSeconds);
+        Assert.Equal(PollingMode.Balanced, config.PollingMode);
         Assert.False(config.NotificationsEnabled);
         Assert.False(config.OverlayEnabled);
     }

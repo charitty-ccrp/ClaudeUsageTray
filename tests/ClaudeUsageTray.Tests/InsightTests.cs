@@ -257,7 +257,7 @@ public class UsageServiceExtrasTests
     {
         var previous = SynchronizationContext.Current;
         SynchronizationContext.SetSynchronizationContext(null);
-        try { return new UsageService(provider, () => TimeSpan.FromSeconds(60), () => Now); }
+        try { return new UsageService(provider, () => TimeSpan.FromSeconds(60), () => Now, jitter: d => d); }
         finally { SynchronizationContext.SetSynchronizationContext(previous); }
     }
 

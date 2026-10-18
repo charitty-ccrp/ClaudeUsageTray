@@ -6,8 +6,9 @@ public enum UsageErrorKind
     NotConfigured,
     Authentication,   // HTTP 401
     Forbidden,        // HTTP 403 (may be Cloudflare; do NOT treat as an expired credential)
-    Server,           // 5xx / 429
+    Server,           // 5xx
     InvalidResponse,  // unexpected content / JSON shape
     Network,          // DNS, connect, timeout
     CredentialUnavailable, // OAuth mode: Claude Code login missing/expired; retried automatically (it renews itself)
+    RateLimited,      // HTTP 429; honours Retry-After
 }

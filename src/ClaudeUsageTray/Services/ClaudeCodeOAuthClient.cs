@@ -63,7 +63,7 @@ public sealed class ClaudeCodeOAuthClient : IUsageProvider, IDisposable
             return UsageFetchResult.Fail(UsageErrorKind.CredentialUnavailable,
                 "Claude Code's token was rejected (HTTP 401). Use Claude Code once so it refreshes the token; this app retries automatically.");
         if (raw.Error != UsageErrorKind.None || raw.Body is null)
-            return UsageFetchResult.Fail(raw.Error, raw.Message ?? "Request failed.");
+            return UsageFetchResult.Fail(raw.Error, raw.Message ?? "Request failed.", raw.RetryAfter);
 
         return ClaudeUsageClient.ParseUsage(raw.Body);
     }

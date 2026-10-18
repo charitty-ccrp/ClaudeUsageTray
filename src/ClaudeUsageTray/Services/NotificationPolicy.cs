@@ -70,3 +70,28 @@ public sealed class NotificationPolicy
     private static bool ResetTimeChanged(DateTimeOffset? previous, DateTimeOffset? current) =>
         previous is { } a && current is { } b && (a - b).Duration() > ResetTolerance;
 }
+
+/// <summary>Applies the user's notification choices (which levels, resets, quiet hours) on top of NotificationPolicy.</summary>
+public static class NotificationFilter
+{
+    public static IReadOnlyList<UsageNotification> Apply(IReadOnlyList<UsageNotification> alerts, AppConfig config, DateTime localNow)
+    {
+        if (!config.NotificationsEnabled || InQuietHours(config, localNow)) return [];
+        return alerts.Where(a => a.IsReset ? config.NotifyReset : a.Level switch
+        {
+            UsageLevel.Warning => config.NotifyWarning,
+            UsageLevel.High => config.NotifyHigh,
+            UsageLevel.Critical => config.NotifyCritical,
+            _ => false,
+        }).ToArray();
+    }
+
+    public static bool InQuietHours(AppConfig config, DateTime localNow)
+    {
+        if (!config.QuietHoursEnabled || config.QuietStartHour == config.QuietEndHour) return false;
+        var hour = localNow.Hour;
+        return config.QuietStartHour < config.QuietEndHour
+            ? hour >= config.QuietStartHour && hour < config.QuietEndHour
+            : hour >= config.QuietStartHour || hour < config.QuietEndHour; // wraps past midnight
+    }
+}

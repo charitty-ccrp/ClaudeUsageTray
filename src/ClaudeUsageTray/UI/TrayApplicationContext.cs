@@ -14,6 +14,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
     private readonly ConfigStore _configStore = new();
     private readonly CredentialStore _credentialStore = new();
     private readonly StartupManager _startup = new();
+    private readonly AppShortcuts _shortcuts = new();
     private readonly ClaudeUsageClient? _client;
     private readonly ClaudeCodeOAuthClient? _oauthClient;
     private readonly UsageService _service;
@@ -22,9 +23,25 @@ internal sealed class TrayApplicationContext : ApplicationContext
     private readonly NotifyIcon _notifyIcon;
     private readonly ContextMenuStrip _menu = new();
     private readonly ToolStripMenuItem _usageItem = new() { Enabled = false };
-    private readonly ToolStripMenuItem _remainingItem = new() { Enabled = false };
-    private readonly ToolStripMenuItem _resetItem = new() { Enabled = false };
     private readonly ToolStripMenuItem _weeklyItem = new() { Enabled = false, Visible = false };
+    private readonly ToolStripMenuItem _statusItem = new() { Enabled = false, Visible = false };
+
+    // polling follows local Claude Code activity; the watchers only nudge UsageService, they never fetch themselves
+    private readonly PollingSchedule _schedule;
+    private DebouncedFileWatcher? _activityWatcher;
+    private DebouncedFileWatcher? _credentialsWatcher;
+
+    // optional, display-only estimate between real polls (Settings > General); never feeds the icon or notifications
+    private readonly TranscriptUsageLog _transcripts = new(Path.Combine(ClaudeDir, "projects"));
+    private readonly object _estimateLock = new();
+    private EstimateBaseline? _estimateBaseline;
+    private int? _estimatePercent;
+
+    private readonly UpdateChecker _updates = new();
+    private readonly ToolStripMenuItem _updateItem = new() { Visible = false };
+    private readonly DateTime _startedUtc = DateTime.UtcNow;
+    private UpdateInfo? _update;
+    private bool _updateCheckRunning;
     private readonly UsageForm _popup = new();
     private readonly System.Windows.Forms.Timer _timer = new() { Interval = 1000 };
 
@@ -36,15 +53,16 @@ internal sealed class TrayApplicationContext : ApplicationContext
     private readonly ToolStripMenuItem _overlayLockItem = new("Lock position (click-through)") { CheckOnClick = false };
     private readonly ToolStripMenuItem _overlayResetItem = new("Reset position");
 
-    // Claude Code OAuth mode: auto-open the CLI when the login has expired, so the user does not have to do it by hand.
-    // "claude update" is a maintenance subcommand that refreshes the token and exits by itself (the window closes on
-    // its own); plain "claude" opens the full interactive session, used only for the manual "Sign in..." menu item,
-    // in case the refresh token itself is gone and a real login is needed.
-    private readonly ClaudeCodeLauncher _claudeCodeAutoLauncher = new(arguments: "update");
+    // Claude Code OAuth mode: when the login has expired, run "claude auth status" hidden. Claude Code renews its own
+    // token on the way (no window, no prompt) and the credentials watcher picks up the new one. Plain "claude" opens
+    // the full interactive session, used only for the manual "Sign in..." menu item, in case the refresh token itself
+    // is gone and a real login is needed.
+    private readonly ClaudeCodeLauncher _claudeCodeAutoLauncher = new(arguments: "auth status", hidden: true);
     private readonly ClaudeCodeLauncher _claudeCodeSignInLauncher = new();
     private readonly ToolStripMenuItem _signInItem = new("Sign in to Claude Code...") { Visible = false };
     private readonly System.Windows.Forms.Timer _launchRecheckTimer = new() { Interval = (int)AppConstants.ClaudeCodeLaunchRecheckDelay.TotalMilliseconds };
-    private bool _claudeCodeLaunchAttempted;
+    private DateTimeOffset? _claudeCodeLastRenewal;
+    private bool _claudeCodeSignInHintShown;
 
     private AppConfig _config;
     private string? _sessionKey;
@@ -72,15 +90,15 @@ internal sealed class TrayApplicationContext : ApplicationContext
             provider = new RoutingUsageProvider(() => _config.AuthMode, _client, _oauthClient);
         }
 
-        _service = new UsageService(provider, () => TimeSpan.FromSeconds(_config.RefreshIntervalSeconds));
+        _schedule = new PollingSchedule(() => _config.PollingMode);
+        _service = new UsageService(provider, () => _schedule.Interval(DateTimeOffset.UtcNow));
         _service.StateChanged += OnStateChanged;
         _service.RefreshingChanged += OnRefreshingChanged;
 
-        _menu.Items.Add(new ToolStripMenuItem(mock ? "Claude Usage (MOCK DATA)" : "Claude Usage") { Enabled = false });
+        if (mock) _menu.Items.Add(new ToolStripMenuItem("Mock data") { Enabled = false });
+        _menu.Items.AddRange([_usageItem, _weeklyItem, _statusItem]);
         _menu.Items.Add(new ToolStripSeparator());
-        _menu.Items.AddRange([_usageItem, _remainingItem, _resetItem, _weeklyItem]);
-        _menu.Items.Add(new ToolStripSeparator());
-        _menu.Items.Add("Refresh Now", null, (_, _) => _service.RequestRefresh());
+        _menu.Items.Add("Refresh now", null, (_, _) => _service.RequestRefresh());
 
         var overlayMenu = new ToolStripMenuItem("Overlay");
         overlayMenu.DropDownItems.AddRange([_overlayShowItem, new ToolStripSeparator(), _overlayCompactItem, _overlayFullItem,
@@ -97,8 +115,12 @@ internal sealed class TrayApplicationContext : ApplicationContext
         _menu.Items.Add(_signInItem);
         SyncSignInMenuItem();
 
-        _menu.Items.Add("Settings", null, (_, _) => ShowSettings());
+        _updateItem.Click += (_, _) => { if (_update is { } u) OpenUrl(u.ReleasePage.AbsoluteUri); };
+        _menu.Items.Add(_updateItem);
         _menu.Items.Add("Open Claude", null, (_, _) => OpenClaude());
+        _menu.Items.Add("Settings...", null, (_, _) => ShowSettings());
+        _menu.Items.Add("Copy diagnostics", null, (_, _) => CopyDiagnostics());
+        _menu.Items.Add(new ToolStripSeparator());
         _menu.Items.Add("Exit", null, (_, _) => ExitApp());
 
         _launchRecheckTimer.Tick += (_, _) => { _launchRecheckTimer.Stop(); _service.RequestRefresh(); };
@@ -111,10 +133,13 @@ internal sealed class TrayApplicationContext : ApplicationContext
         _notifyIcon = new NotifyIcon { ContextMenuStrip = _menu, Visible = true };
         _notifyIcon.MouseClick += (_, e) => { if (e.Button == MouseButtons.Left) TogglePopup(); };
 
-        _timer.Tick += (_, _) => { _service.Tick(); RefreshUi(); };
+        _timer.Tick += (_, _) => { _service.Tick(); RefreshUi(); MaybeCheckForUpdates(); };
         _timer.Start();
 
+        StartWatchers();
+
         SystemEvents.PowerModeChanged += OnPowerModeChanged;
+        SystemEvents.SessionSwitch += OnSessionSwitch;
         SystemEvents.TimeChanged += OnTimeChanged;
         SystemEvents.UserPreferenceChanged += OnUserPreferenceChanged;
         SystemEvents.DisplaySettingsChanged += OnDisplaySettingsChanged;
@@ -124,11 +149,18 @@ internal sealed class TrayApplicationContext : ApplicationContext
         ApplyOverlayState(replace: true);
 
         var needsSetup = _config.AuthMode == AuthMode.ClaudeCodeOAuth ? !_config.DisclaimerAccepted : _sessionKey is null;
-        if (!mock && needsSetup)
+        var offerShortcuts = !mock && !_config.ShortcutsOffered && !_shortcuts.Exist;
+        if (!mock && (needsSetup || offerShortcuts))
         {
-            // first run: open setup once the message loop is running
+            // first run: open setup, then offer shortcuts, once the message loop is running
             var first = new System.Windows.Forms.Timer { Interval = 300 };
-            first.Tick += (_, _) => { first.Stop(); first.Dispose(); ShowSetup(); };
+            first.Tick += (_, _) =>
+            {
+                first.Stop();
+                first.Dispose();
+                if (needsSetup) ShowSetup();
+                if (offerShortcuts) OfferShortcuts();
+            };
             first.Start();
         }
     }
@@ -137,36 +169,56 @@ internal sealed class TrayApplicationContext : ApplicationContext
     {
         _state = state;
         Notify(state);
+        OnRealReading(state);
         RefreshUi();
         MaybeAutoLaunchClaudeCode(state);
     }
 
-    /// <summary>Opens the Claude Code CLI once per failure episode when its login has expired; never more than one window.</summary>
+    /// <summary>
+    /// When Claude Code's login has expired, renews it silently in the background (at most every few minutes, never two
+    /// at once). Only if that does not help is the user told, once per failure episode, to sign in from the tray menu.
+    /// </summary>
     private void MaybeAutoLaunchClaudeCode(UsageState state)
     {
         if (state.Error == UsageErrorKind.None)
         {
-            _claudeCodeLaunchAttempted = false;
+            _claudeCodeLastRenewal = null;
+            _claudeCodeSignInHintShown = false;
             return;
         }
+        var now = DateTimeOffset.UtcNow;
         if (!ClaudeCodeRecoveryPolicy.ShouldAutoLaunch(_config.AuthMode, state.Error, _config.AutoLaunchClaudeCode,
-                _claudeCodeLaunchAttempted, _claudeCodeAutoLauncher.IsRunning))
+                _claudeCodeLastRenewal, now, _claudeCodeAutoLauncher.IsRunning))
+        {
+            // a renewal already ran for this failure and the login is still not back: a real sign-in is needed
+            if (_claudeCodeLastRenewal is not null && !_claudeCodeAutoLauncher.IsRunning && !_claudeCodeSignInHintShown &&
+                state.Error == UsageErrorKind.CredentialUnavailable)
+            {
+                _claudeCodeSignInHintShown = true;
+                _notifyIcon.ShowBalloonTip(10_000, "Claude Code sign-in needed",
+                    "Claude Code's login could not be renewed automatically. Use \"Sign in to Claude Code...\" from the tray menu.",
+                    ToolTipIcon.Warning);
+            }
             return;
+        }
 
-        _claudeCodeLaunchAttempted = true;
+        _claudeCodeLastRenewal = now;
+        if (!_claudeCodeAutoLauncher.IsAvailable)
+        {
+            // nothing to run; the credentials watcher refreshes as soon as Claude Code or the Claude app renews the login
+            Logger.Info("Claude Code login expired and the claude CLI is not installed; waiting for it to be renewed.");
+            return;
+        }
         var (started, error) = _claudeCodeAutoLauncher.Launch();
         if (started)
         {
-            Logger.Info("Ran 'claude update' so Claude Code can refresh its login; the window closes itself when done.");
+            Logger.Info("Claude Code login expired; renewing it in the background ('claude auth status', no window).");
             _launchRecheckTimer.Stop();
-            _launchRecheckTimer.Start(); // give the CLI a few seconds to refresh the token, then try again sooner than backoff would
-            _notifyIcon.ShowBalloonTip(10_000, "Claude Code sign-in needed",
-                "Refreshing Claude Code's login in the background. If it does not reconnect, use \"Sign in to Claude Code...\" " +
-                "from the tray menu.", ToolTipIcon.Info);
+            _launchRecheckTimer.Start(); // give the CLI a few seconds to renew the token, then try again sooner than backoff would
         }
         else
         {
-            Logger.Warn($"Could not auto-launch Claude Code: {error}"); // avoid spamming a balloon on every retry
+            Logger.Warn($"Could not run Claude Code to renew its login: {error}"); // avoid spamming a balloon on every retry
         }
     }
 
@@ -193,8 +245,8 @@ internal sealed class TrayApplicationContext : ApplicationContext
     /// <summary>Always evaluates (so baselines stay current) but only shows a toast when the user wants them.</summary>
     private void Notify(UsageState state)
     {
-        var alerts = _notifications.Evaluate(state);
-        if (alerts.Count == 0 || !_config.NotificationsEnabled) return;
+        var alerts = NotificationFilter.Apply(_notifications.Evaluate(state), _config, DateTime.Now);
+        if (alerts.Count == 0) return;
 
         var toast = UsageText.Toast(alerts, DateTimeOffset.UtcNow);
         _notifyIcon.ShowBalloonTip(10_000, toast.Title, toast.Text, toast.Warn ? ToolTipIcon.Warning : ToolTipIcon.Info);
@@ -212,29 +264,33 @@ internal sealed class TrayApplicationContext : ApplicationContext
         var level = UsageColor.Classify(percent);
 
         // re-render the icon only when something visible changed (each render allocates a GDI icon)
-        var key = $"{percent}|{level}|{_state.IsStale}";
+        // a quiet (brief, transient) failure keeps the normal icon; only a lasting problem marks the value stale
+        var showStale = _state.IsStale && !_state.IsQuietFailure;
+        var key = $"{percent}|{level}|{showStale}";
         if (key != _iconKey)
         {
-            var next = TrayIconRenderer.Render(percent, level, _state.IsStale);
+            var next = TrayIconRenderer.Render(percent, level, showStale);
             _notifyIcon.Icon = next.Icon;
             _iconHandle?.Dispose();
             _iconHandle = next;
             _iconKey = key;
         }
 
-        _notifyIcon.Text = UsageText.Tooltip(_state, now);
+        _notifyIcon.Text = UsageText.Tooltip(_state, now, CurrentEstimate(now));
 
         var fiveHour = snapshot?.FiveHour;
         _usageItem.Text = fiveHour is null
-            ? "5-Hour Usage: --"
-            : $"5-Hour Usage: {UsageMath.DisplayUtilization(fiveHour.Utilization)}%{(_state.IsStale ? " (stale)" : string.Empty)}";
-        _remainingItem.Text = fiveHour is null ? "Remaining: --" : $"Remaining: {UsageMath.DisplayRemaining(fiveHour.Utilization)}%";
-        _resetItem.Text = $"Reset: {UsageText.ResetText(_state, now, false)}";
+            ? "5-hour: waiting for data"
+            : $"5-hour: {UsageMath.DisplayUtilization(fiveHour.Utilization)}% · resets {UsageText.ResetText(_state, now, false)}";
 
         var sevenDay = snapshot?.Usage.SevenDay;
         _weeklyItem.Visible = sevenDay is not null;
         if (sevenDay is not null)
-            _weeklyItem.Text = $"Weekly Usage: {UsageMath.DisplayUtilization(sevenDay.Utilization)}%";
+            _weeklyItem.Text = $"Weekly: {UsageMath.DisplayUtilization(sevenDay.Utilization)}%";
+
+        var problem = _state.Error != UsageErrorKind.None && !_state.IsQuietFailure;
+        _statusItem.Visible = problem;
+        if (problem) _statusItem.Text = UsageText.ShortError(_state.Error) + (showStale ? " · showing last value" : string.Empty);
 
         PanelModel? model = null; // built at most once per refresh, shared by the popup and the overlay
         if (_popup.Visible) _popup.UpdateView(model ??= BuildModel(now), _service.IsRefreshing);
@@ -361,7 +417,8 @@ internal sealed class TrayApplicationContext : ApplicationContext
         PostToUi(() => Guard("display change", () => { if (_overlay is { } overlay) overlay.PlaceAt(overlay.Location.X, overlay.Location.Y); }));
 
     private PanelModel BuildModel(DateTimeOffset now) =>
-        PanelModelBuilder.Build(_state, now, _service.BurnRates, SourceBadge(), CredentialAgeDays(), _service.IsRefreshing);
+        PanelModelBuilder.Build(_state, now, _service.BurnRates, SourceBadge(), CredentialAgeDays(), _service.IsRefreshing,
+            CurrentEstimate(now));
 
     private string SourceBadge() =>
         _mock ? "Mock data" : _config.AuthMode == AuthMode.ClaudeCodeOAuth ? "Claude Code" : "Cookie";
@@ -394,9 +451,10 @@ internal sealed class TrayApplicationContext : ApplicationContext
             removeCredential: RemoveCredential,
             credentialAvailable: _sessionKey is not null,
             mode: _config.AuthMode,
-            autoLaunchClaudeCode: _config.AutoLaunchClaudeCode,
+            claudeCliAvailable: _claudeCodeAutoLauncher.IsAvailable,
             previewOverlayOpacity: percent => { if (_overlay is { } overlay) Guard("opacity", () => overlay.OpacityPercent = percent); },
-            resetOverlayPosition: () => UpdateOverlayConfig(c => { c.OverlayX = null; c.OverlayY = null; }, replace: true));
+            resetOverlayPosition: () => UpdateOverlayConfig(c => { c.OverlayX = null; c.OverlayY = null; }, replace: true),
+            shortcutsExist: _shortcuts.Exist);
         _openDialog = form;
         try
         {
@@ -406,21 +464,18 @@ internal sealed class TrayApplicationContext : ApplicationContext
                 return;
             }
 
-            _config.RefreshIntervalSeconds = form.RefreshIntervalSeconds;
-            _config.StartWithWindows = form.StartWithWindows;
-            _config.NotificationsEnabled = form.NotificationsEnabled;
-            _config.AutoLaunchClaudeCode = form.AutoLaunchClaudeCode;
-            _config.OverlayEnabled = form.OverlayEnabled;
-            _config.OverlayCompact = form.OverlayCompact;
-            _config.OverlayLocked = form.OverlayLocked;
-            _config.OverlayOpacity = form.OverlayOpacity;
+            form.ApplyTo(_config);
             if (!_startup.SetEnabled(form.StartWithWindows))
             {
                 _config.StartWithWindows = _startup.IsEnabled;
                 MessageBox.Show("Could not change the Startup shortcut.", "Claude Usage", MessageBoxButtons.OK, MessageBoxIcon.Warning);
             }
+            if (form.Shortcuts != _shortcuts.Exist && !_shortcuts.SetEnabled(form.Shortcuts))
+                MessageBox.Show("Could not change the Start menu and desktop shortcuts.", "Claude Usage", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            _config.ShortcutsOffered = true;
             _configStore.Save(_config);
             ApplyOverlayState();
+            ResetEstimate();
             _service.RequestRefresh();
         }
         finally
@@ -458,6 +513,25 @@ internal sealed class TrayApplicationContext : ApplicationContext
         }
     }
 
+    /// <summary>
+    /// Asked once: the portable .exe has no installer, so offer the Start menu and desktop shortcuts an installed program
+    /// would have. Skipped when the installer already made them. Can be changed later in Settings.
+    /// </summary>
+    private void OfferShortcuts()
+    {
+        if (_cleanedUp || _openDialog is not null) return;
+        _config.ShortcutsOffered = true;
+        SaveConfigQuietly();
+
+        var answer = MessageBox.Show(
+            "Add Claude Usage Tray to the Start menu and the desktop, so you can open it like any other program?\n\n" +
+            "The shortcuts point to this file, so keep it where it is:\n" + Environment.ProcessPath +
+            "\n\nYou can change this later in Settings.",
+            "Claude Usage", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+        if (answer == DialogResult.Yes && !_shortcuts.SetEnabled(true))
+            MessageBox.Show("Could not create the shortcuts.", "Claude Usage", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+    }
+
     private void RemoveCredential()
     {
         _credentialStore.Delete();
@@ -474,11 +548,37 @@ internal sealed class TrayApplicationContext : ApplicationContext
         return true;
     }
 
-    private static void OpenClaude()
+    /// <summary>Once a day (first check a minute after start), off the UI thread; failures are silent.</summary>
+    private async void MaybeCheckForUpdates()
+    {
+        if (_mock || _updateCheckRunning || !_config.CheckForUpdates) return;
+        if (DateTime.UtcNow - _startedUtc < TimeSpan.FromMinutes(1)) return;
+        if (_config.LastUpdateCheck is { } last && DateTimeOffset.UtcNow - last < UpdateChecker.Interval) return;
+
+        _updateCheckRunning = true;
+        try
+        {
+            _config.LastUpdateCheck = DateTimeOffset.UtcNow;
+            SaveConfigQuietly();
+            _update = await _updates.CheckAsync(UpdateChecker.CurrentVersion, CancellationToken.None);
+            if (_cleanedUp || _update is null) return;
+            _updateItem.Text = $"Update available: {_update.Tag}...";
+            _updateItem.Visible = true;
+            Logger.Info($"Update available: {_update.Tag}");
+        }
+        finally
+        {
+            _updateCheckRunning = false;
+        }
+    }
+
+    private static void OpenClaude() => OpenUrl(AppConstants.ClaudeHomeUrl);
+
+    private static void OpenUrl(string url)
     {
         try
         {
-            Process.Start(new ProcessStartInfo(AppConstants.ClaudeHomeUrl) { UseShellExecute = true });
+            Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
         }
         catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException)
         {
@@ -486,13 +586,155 @@ internal sealed class TrayApplicationContext : ApplicationContext
         }
     }
 
-    // SystemEvents callbacks arrive on a background thread; RequestRefresh is thread-safe.
+    // SystemEvents callbacks arrive on a background thread; RequestRefresh and Paused are thread-safe.
     private void OnPowerModeChanged(object? sender, PowerModeChangedEventArgs e)
     {
         if (e.Mode != PowerModes.Resume) return;
         Logger.Info("Resumed from sleep");
-        // give the network a moment to come back before the first request
-        Task.Delay(TimeSpan.FromSeconds(3)).ContinueWith(_ => _service.RequestRefresh(), TaskScheduler.Default);
+        _ = RefreshWhenOnlineAsync();
+    }
+
+    /// <summary>After sleep the network can take a while; asking before it is back only produces a "network" error.</summary>
+    private async Task RefreshWhenOnlineAsync()
+    {
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(30);
+        while (!System.Net.NetworkInformation.NetworkInterface.GetIsNetworkAvailable() && DateTime.UtcNow < deadline)
+            await Task.Delay(1000).ConfigureAwait(false);
+        await Task.Delay(TimeSpan.FromSeconds(2)).ConfigureAwait(false); // DNS and Wi-Fi settle just after the link comes up
+        _service.RequestRefresh();
+    }
+
+    /// <summary>No automatic requests while the PC is locked; one refresh on unlock so the value is fresh.</summary>
+    private void OnSessionSwitch(object? sender, SessionSwitchEventArgs e)
+    {
+        if (e.Reason is SessionSwitchReason.SessionLock or SessionSwitchReason.ConsoleDisconnect or SessionSwitchReason.RemoteDisconnect)
+            _service.Paused = true;
+        else if (e.Reason is SessionSwitchReason.SessionUnlock or SessionSwitchReason.ConsoleConnect or SessionSwitchReason.RemoteConnect)
+            _service.Paused = false;
+    }
+
+    private static string ClaudeDir => Path.GetDirectoryName(ClaudeCodeOAuthClient.DefaultCredentialsPath)!;
+
+    private void StartWatchers()
+    {
+        var claudeDir = ClaudeDir;
+
+        // Claude Code writes its transcripts as you use it: that is when usage moves, so poll more often then
+        // (with --mock it only drives the local estimate, so the estimate can be seen without a real account)
+        _activityWatcher = new DebouncedFileWatcher(Path.Combine(claudeDir, "projects"), "*.jsonl",
+            includeSubdirectories: true, delay: TimeSpan.FromSeconds(20), OnLocalActivity);
+        if (_mock) return;
+
+        // Claude Code (or the Claude app) rewrites this file when it renews the login: recover right away
+        _credentialsWatcher = new DebouncedFileWatcher(claudeDir, Path.GetFileName(ClaudeCodeOAuthClient.DefaultCredentialsPath),
+            includeSubdirectories: false, delay: TimeSpan.FromSeconds(3), () =>
+            {
+                if (_config.AuthMode != AuthMode.ClaudeCodeOAuth || _service.State.Error == UsageErrorKind.None) return;
+                Logger.Info("Claude Code login file changed; refreshing.");
+                _service.RequestRefresh();
+            });
+    }
+
+    private void OnLocalActivity()
+    {
+        var now = DateTimeOffset.UtcNow;
+        if (!_mock)
+        {
+            _schedule.RecordActivity(now);
+            if (!_service.Paused && _schedule.ShouldRefreshOnActivity(_service.State.LastSuccessfulUpdate, now))
+                _service.RequestRefresh();
+        }
+        UpdateEstimate(); // already on a thread-pool thread
+    }
+
+    // ---------- local estimate between polls ----------
+
+    /// <summary>The estimate to show right now, or null. Only while the real value it was scaled from is still on screen.</summary>
+    private int? CurrentEstimate(DateTimeOffset now)
+    {
+        if (!_config.ShowLocalEstimate || _state.Snapshot is not { } snapshot || (_state.IsStale && !_state.IsQuietFailure)) return null;
+        lock (_estimateLock)
+        {
+            if (_estimateBaseline is not { } baseline || baseline.ReadingAt != snapshot.FetchedAt || now >= baseline.WindowEnd) return null;
+            return _estimatePercent;
+        }
+    }
+
+    /// <summary>A new real reading replaces the estimate; the transcripts are re-read off the UI thread to set the next baseline.</summary>
+    private void OnRealReading(UsageState state)
+    {
+        if (!_config.ShowLocalEstimate || state.Snapshot is not { } snapshot || state.IsStale) return;
+        lock (_estimateLock)
+        {
+            if (_estimateBaseline?.ReadingAt == snapshot.FetchedAt) return;
+            _estimateBaseline = null;
+            _estimatePercent = null;
+        }
+        _ = Task.Run(() =>
+        {
+            var reading = snapshot.FiveHour;
+            if (reading.ResetsAt is { } end) _transcripts.Scan(end - LocalUsageEstimator.WindowLength);
+            var baseline = LocalUsageEstimator.Baseline(reading.Utilization, reading.ResetsAt, snapshot.FetchedAt, _transcripts.WeightBetween);
+            lock (_estimateLock)
+            {
+                // a newer reading may have arrived while this one was scanning
+                if (_state.Snapshot?.FetchedAt == snapshot.FetchedAt) _estimateBaseline = baseline;
+            }
+        });
+    }
+
+    private void UpdateEstimate()
+    {
+        if (!_config.ShowLocalEstimate) return;
+        EstimateBaseline? baseline;
+        lock (_estimateLock) baseline = _estimateBaseline;
+        if (baseline is null) return;
+
+        var now = DateTimeOffset.UtcNow;
+        _transcripts.Scan(baseline.WindowStart);
+        var estimate = LocalUsageEstimator.Estimate(baseline, _transcripts.WeightBetween(baseline.WindowStart, now), now);
+        int? percent = estimate is { } e ? UsageMath.DisplayUtilization(e) : null;
+        lock (_estimateLock)
+        {
+            if (!ReferenceEquals(_estimateBaseline, baseline) || _estimatePercent == percent) return;
+            _estimatePercent = percent;
+        }
+        if (percent is not null) Logger.Info($"Local estimate ≈{percent}% (real reading {UsageMath.DisplayUtilization(baseline.Percent)}%)");
+        PostToUi(RefreshUi);
+    }
+
+    /// <summary>After Settings change: drop any estimate and, when on, start from the value on screen.</summary>
+    private void ResetEstimate()
+    {
+        lock (_estimateLock)
+        {
+            _estimateBaseline = null;
+            _estimatePercent = null;
+        }
+        OnRealReading(_state);
+    }
+
+    private void CopyDiagnostics()
+    {
+        var version = typeof(TrayApplicationContext).Assembly.GetName().Version?.ToString(3) ?? "?";
+        var now = DateTimeOffset.UtcNow;
+        var lines = new List<string>
+        {
+            $"Claude Usage Tray {version} on {Environment.OSVersion.VersionString}",
+            $"Source: {SourceBadge()} · polling: {_config.PollingMode} ({(_schedule.IsActive(now) ? "active" : "idle")}, every {UsageText.Countdown(_schedule.Interval(now))})",
+            $"Claude CLI found: {_claudeCodeAutoLauncher.IsAvailable} · state: {_state.Error}{(_state.IsQuietFailure ? " (quiet)" : string.Empty)}",
+            "--- recent log ---",
+        };
+        lines.AddRange(Logger.Tail(50));
+        try
+        {
+            Clipboard.SetText(string.Join(Environment.NewLine, lines));
+            _notifyIcon.ShowBalloonTip(3000, "Claude Usage", "Diagnostics copied to the clipboard.", ToolTipIcon.Info);
+        }
+        catch (System.Runtime.InteropServices.ExternalException ex)
+        {
+            Logger.Warn($"Could not copy diagnostics: {ex.GetType().Name}");
+        }
     }
 
     private void OnTimeChanged(object? sender, EventArgs e) => _service.RequestRefresh();
@@ -529,7 +771,10 @@ internal sealed class TrayApplicationContext : ApplicationContext
         _cleanedUp = true;
 
         SystemEvents.PowerModeChanged -= OnPowerModeChanged;
+        SystemEvents.SessionSwitch -= OnSessionSwitch;
         SystemEvents.TimeChanged -= OnTimeChanged;
+        _activityWatcher?.Dispose();
+        _credentialsWatcher?.Dispose();
         SystemEvents.UserPreferenceChanged -= OnUserPreferenceChanged;
         SystemEvents.DisplaySettingsChanged -= OnDisplaySettingsChanged;
         try { _overlay?.Dispose(); } catch (Exception) { /* shutting down anyway */ }
@@ -544,6 +789,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
         _service.StateChanged -= OnStateChanged;
         _service.RefreshingChanged -= OnRefreshingChanged;
         _service.Dispose();
+        _updates.Dispose();
         _client?.Dispose();
         _oauthClient?.Dispose();
 

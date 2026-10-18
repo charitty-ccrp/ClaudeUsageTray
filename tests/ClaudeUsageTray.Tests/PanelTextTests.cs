@@ -71,6 +71,16 @@ public class TooltipAndToastTests
     }
 
     [Fact]
+    public void Tooltip_labels_the_local_estimate_and_keeps_the_real_figure_first()
+    {
+        var text = UsageText.Tooltip(State(60, week: 18), Now, estimatePercent: 66);
+
+        Assert.StartsWith("Claude 60% 5h · 18% wk\n≈ 66% (est.) · Reset: 03h 15m\n", text);
+        Assert.DoesNotContain("est.", UsageText.Tooltip(State(60), Now, estimatePercent: 60));
+        Assert.DoesNotContain("est.", UsageText.Tooltip(State(60), Now));
+    }
+
+    [Fact]
     public void Tooltip_lists_both_windows_and_the_reset_of_the_one_driving_the_icon()
     {
         var text = UsageText.Tooltip(State(60, week: 18), Now);
@@ -99,7 +109,7 @@ public class TooltipAndToastTests
         var text = UsageText.Tooltip(State(100, week: 100, opus: 100, stale: true), Now);
 
         Assert.True(text.Length <= 127, text);
-        Assert.Contains("STALE", text);
+        Assert.Contains("(last known)", text);
         Assert.Contains("Last update", text);
     }
 
@@ -156,6 +166,18 @@ public class PanelModelTests
         PanelModelBuilder.Build(state, at ?? Now, new BurnRateTracker(), "Claude Code", credentialAge, refreshing);
 
     [Fact]
+    public void Estimate_line_is_labelled_and_never_replaces_the_real_percentage()
+    {
+        var model = PanelModelBuilder.Build(Ok(40), Now, new BurnRateTracker(), "Claude Code", null, false, estimatePercent: 47);
+
+        Assert.Equal(40, model.Primary!.Percent);
+        Assert.StartsWith("≈ 47% (est.)", model.EstimateLine);
+        Assert.NotEqual(Build(Ok(40)).Signature, model.Signature);
+        Assert.Null(Build(Ok(40)).EstimateLine);
+        Assert.Null(PanelModelBuilder.Build(Ok(40), Now, new BurnRateTracker(), "Claude Code", null, false, estimatePercent: 40).EstimateLine);
+    }
+
+    [Fact]
     public void Splits_the_five_hour_window_from_the_others()
     {
         var model = Build(Ok(40, week: 92, opus: 5));
@@ -203,7 +225,7 @@ public class PanelModelTests
     {
         var stale = Ok(10) with { IsStale = true, Error = UsageErrorKind.Network, NextAttemptAt = Now.AddSeconds(15) };
         var footer = PanelModelBuilder.Footer(stale, Now, false);
-        Assert.Contains("(STALE)", footer);
+        Assert.Contains("(last known value)", footer);
         Assert.EndsWith("retry in 15s", footer);
 
         var auth = Ok(10) with { IsStale = true, Error = UsageErrorKind.Authentication, NextAttemptAt = null };

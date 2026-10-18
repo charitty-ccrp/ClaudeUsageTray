@@ -9,8 +9,15 @@
     <AssemblyName>ClaudeUsageTray</AssemblyName>
     <RootNamespace>ClaudeUsageTray</RootNamespace>
     <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
-    <Version>0.1.0</Version>
+    <Version>0.2.0</Version>
     <InvariantGlobalization>true</InvariantGlobalization>
+    <Product>Claude Usage Tray</Product>
+    <Description>Claude 5-hour and weekly usage in the Windows tray</Description>
+  </PropertyGroup>
+
+  <!-- the .exe's own icon (Explorer, Start Menu, taskbar). Regenerate it with the write-icon switch (see README). -->
+  <PropertyGroup Condition="Exists('..\..\assets\app.ico')">
+    <ApplicationIcon>..\..\assets\app.ico</ApplicationIcon>
   </PropertyGroup>
 
   <ItemGroup>

@@ -16,5 +16,5 @@ coverage/
 
 # never commit credentials or local app data
 *.dat
-credential*
-config.json
+/credential.dat
+/config.json

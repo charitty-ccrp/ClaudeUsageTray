@@ -70,7 +70,7 @@ public class ConfigStoreTests
         using var dir = new TempDir();
         var config = new ConfigStore(Path.Combine(dir.Path, "config.json")).Load();
 
-        Assert.Equal(60, config.RefreshIntervalSeconds);
+        Assert.Equal(PollingMode.Balanced, config.PollingMode);
         Assert.False(config.StartWithWindows);
         Assert.Null(config.OrganizationId);
     }
@@ -82,11 +82,21 @@ public class ConfigStoreTests
         var path = Path.Combine(dir.Path, "config.json");
         var store = new ConfigStore(path);
 
-        store.Save(new AppConfig { OrganizationId = "123e4567-e89b-12d3-a456-426614174000", RefreshIntervalSeconds = 90 });
+        store.Save(new AppConfig
+        {
+            OrganizationId = "123e4567-e89b-12d3-a456-426614174000",
+            PollingMode = PollingMode.Saver,
+            QuietHoursEnabled = true,
+            QuietStartHour = 23,
+            NotifyWarning = false,
+        });
         var loaded = store.Load();
 
         Assert.Equal("123e4567-e89b-12d3-a456-426614174000", loaded.OrganizationId);
-        Assert.Equal(90, loaded.RefreshIntervalSeconds);
+        Assert.Equal(PollingMode.Saver, loaded.PollingMode);
+        Assert.True(loaded.QuietHoursEnabled);
+        Assert.Equal(23, loaded.QuietStartHour);
+        Assert.False(loaded.NotifyWarning);
         var text = File.ReadAllText(path);
         Assert.DoesNotContain("sessionKey", text, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("sk-ant", text);
@@ -99,19 +109,35 @@ public class ConfigStoreTests
         var path = Path.Combine(dir.Path, "config.json");
         File.WriteAllText(path, "{ definitely not json");
 
-        Assert.Equal(60, new ConfigStore(path).Load().RefreshIntervalSeconds);
+        Assert.Equal(PollingMode.Balanced, new ConfigStore(path).Load().PollingMode);
     }
 
-    [Theory]
-    [InlineData(1, 30)]
-    [InlineData(999999, 3600)]
-    public void Refresh_interval_is_clamped(int value, int expected)
+    [Fact]
+    public void Old_fixed_refresh_interval_is_ignored_and_becomes_balanced_polling()
     {
         using var dir = new TempDir();
         var path = Path.Combine(dir.Path, "config.json");
-        File.WriteAllText(path, $$"""{ "refreshIntervalSeconds": {{value}} }""");
+        File.WriteAllText(path, """{ "refreshIntervalSeconds": 30, "notificationsEnabled": false }""");
 
-        Assert.Equal(expected, new ConfigStore(path).Load().RefreshIntervalSeconds);
+        var config = new ConfigStore(path).Load();
+
+        Assert.Equal(PollingMode.Balanced, config.PollingMode);
+        Assert.False(config.NotificationsEnabled);
+    }
+
+    [Theory]
+    [InlineData(-3, 0)]
+    [InlineData(40, 23)]
+    public void Quiet_hours_are_clamped_to_a_real_hour(int value, int expected)
+    {
+        using var dir = new TempDir();
+        var path = Path.Combine(dir.Path, "config.json");
+        File.WriteAllText(path, $$"""{ "quietStartHour": {{value}}, "quietEndHour": {{value}} }""");
+
+        var config = new ConfigStore(path).Load();
+
+        Assert.Equal(expected, config.QuietStartHour);
+        Assert.Equal(expected, config.QuietEndHour);
     }
 }
 
@@ -130,5 +156,23 @@ public class StartupManagerTests
 
         Assert.True(manager.SetEnabled(false));
         Assert.False(manager.IsEnabled);
+    }
+
+    [Fact]
+    public void Start_menu_and_desktop_shortcuts_are_created_and_removed_together()
+    {
+        using var startMenu = new TempDir();
+        using var desktop = new TempDir();
+        var shortcuts = new AppShortcuts(startMenu.Path, desktop.Path, Environment.ProcessPath);
+
+        Assert.False(shortcuts.Exist);
+        Assert.True(shortcuts.SetEnabled(true));
+        Assert.True(shortcuts.Exist);
+        Assert.True(File.Exists(Path.Combine(startMenu.Path, "Claude Usage Tray.lnk")));
+        Assert.True(File.Exists(Path.Combine(desktop.Path, "Claude Usage Tray.lnk")));
+
+        Assert.True(shortcuts.SetEnabled(false));
+        Assert.False(shortcuts.Exist);
+        Assert.Empty(Directory.GetFiles(desktop.Path));
     }
 }

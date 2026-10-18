@@ -13,8 +13,10 @@ public sealed class AppConfig
     [JsonPropertyName("organizationId")]
     public string? OrganizationId { get; set; }
 
-    [JsonPropertyName("refreshIntervalSeconds")]
-    public int RefreshIntervalSeconds { get; set; } = AppConstants.DefaultRefreshSeconds;
+    /// <summary>Replaces the old fixed "refreshIntervalSeconds" (ignored on load, so old configs get Balanced).</summary>
+    [JsonPropertyName("pollingMode")]
+    [JsonConverter(typeof(JsonStringEnumConverter))]
+    public PollingMode PollingMode { get; set; } = PollingMode.Balanced;
 
     [JsonPropertyName("startWithWindows")]
     public bool StartWithWindows { get; set; }
@@ -26,9 +28,47 @@ public sealed class AppConfig
     [JsonPropertyName("notificationsEnabled")]
     public bool NotificationsEnabled { get; set; } = true;
 
+    // which alerts to show (the levels match the icon colours: 70% yellow, 85% orange, 95% red)
+    [JsonPropertyName("notifyWarning")]
+    public bool NotifyWarning { get; set; } = true;
+
+    [JsonPropertyName("notifyHigh")]
+    public bool NotifyHigh { get; set; } = true;
+
+    [JsonPropertyName("notifyCritical")]
+    public bool NotifyCritical { get; set; } = true;
+
+    [JsonPropertyName("notifyReset")]
+    public bool NotifyReset { get; set; } = true;
+
+    /// <summary>No pop-ups between QuietStartHour and QuietEndHour (local time, may wrap past midnight).</summary>
+    [JsonPropertyName("quietHoursEnabled")]
+    public bool QuietHoursEnabled { get; set; }
+
+    [JsonPropertyName("quietStartHour")]
+    public int QuietStartHour { get; set; } = 22;
+
+    [JsonPropertyName("quietEndHour")]
+    public int QuietEndHour { get; set; } = 7;
+
     /// <summary>Claude Code OAuth mode only: open the Claude Code CLI automatically when its login has expired.</summary>
     [JsonPropertyName("autoLaunchClaudeCode")]
     public bool AutoLaunchClaudeCode { get; set; } = true;
+
+    /// <summary>Once a day, ask GitHub whether a newer release exists (only shows a menu item; never installs).</summary>
+    [JsonPropertyName("checkForUpdates")]
+    public bool CheckForUpdates { get; set; } = true;
+
+    /// <summary>Between real polls, show a clearly labelled estimate from local Claude Code transcripts. Display only.</summary>
+    [JsonPropertyName("showLocalEstimate")]
+    public bool ShowLocalEstimate { get; set; }
+
+    [JsonPropertyName("lastUpdateCheck")]
+    public DateTimeOffset? LastUpdateCheck { get; set; }
+
+    /// <summary>Set once the app has asked (on first run) whether to add Start menu and desktop shortcuts.</summary>
+    [JsonPropertyName("shortcutsOffered")]
+    public bool ShortcutsOffered { get; set; }
 
     [JsonPropertyName("disclaimerAccepted")]
     public bool DisclaimerAccepted { get; set; }
@@ -57,7 +97,9 @@ public sealed class AppConfig
 
     public void Normalize()
     {
-        RefreshIntervalSeconds = Math.Clamp(RefreshIntervalSeconds, AppConstants.MinRefreshSeconds, AppConstants.MaxRefreshSeconds);
         OverlayOpacity = Math.Clamp(OverlayOpacity, AppConstants.MinOverlayOpacity, AppConstants.MaxOverlayOpacity);
+        QuietStartHour = Math.Clamp(QuietStartHour, 0, 23);
+        QuietEndHour = Math.Clamp(QuietEndHour, 0, 23);
+        if (!Enum.IsDefined(PollingMode)) PollingMode = PollingMode.Balanced;
     }
 }
