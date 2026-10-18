@@ -13,6 +13,10 @@
     <InvariantGlobalization>true</InvariantGlobalization>
     <Product>Claude Usage Tray</Product>
     <Description>Claude 5-hour and weekly usage in the Windows tray</Description>
+    <Authors>Charittiporn Chamcharoenporn</Authors>
+    <Company>charitty-ccrp</Company>
+    <Copyright>Copyright (c) 2026 Charittiporn Chamcharoenporn. MIT License.</Copyright>
+    <RepositoryUrl>https://github.com/charitty-ccrp/ClaudeUsageTray</RepositoryUrl>
   </PropertyGroup>
 
   <!-- the .exe's own icon (Explorer, Start Menu, taskbar). Regenerate it with the write-icon switch (see README). -->

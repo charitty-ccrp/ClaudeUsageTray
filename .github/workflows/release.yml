@@ -3,6 +3,13 @@ name: Release
 on:
   push:
     tags: ['v*']
+  # dry run: builds both downloads and keeps them as a workflow artifact, without publishing a release
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version to stamp (numbers only, e.g. 0.2.0)
+        required: true
+        default: '0.0.1'
 
 permissions:
   contents: write
@@ -21,17 +28,53 @@ jobs:
       - name: Publish single-file exe and build the installer
         shell: pwsh
         run: |
-          $version = '${{ github.ref_name }}'.TrimStart('v')
+          $version = if ('${{ github.ref_type }}' -eq 'tag') { '${{ github.ref_name }}'.TrimStart('v') } else { '${{ inputs.version }}' }
           dotnet publish src/ClaudeUsageTray -p:PublishProfile=win-x64 "-p:Version=$version"
           if (-not (Get-Command iscc -ErrorAction SilentlyContinue)) { choco install innosetup --no-progress -y }
           $iscc = (Get-Command iscc -ErrorAction SilentlyContinue).Source
           if (-not $iscc) { $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" }
           & $iscc "/DAppVersion=$version" installer\ClaudeUsageTray.iss
+          if ($LASTEXITCODE -ne 0) { throw "Inno Setup failed with exit code $LASTEXITCODE" }
           Copy-Item artifacts\publish\ClaudeUsageTray.exe "artifacts\ClaudeUsageTray-$version-portable.exe"
 
-      - uses: softprops/action-gh-release@v2
+          # never publish a release with a file missing
+          $files = @("artifacts\ClaudeUsageTraySetup-$version.exe", "artifacts\ClaudeUsageTray-$version-portable.exe")
+          foreach ($f in $files) { if (-not (Test-Path $f)) { throw "Missing $f" } }
+
+          # checksums so users can check their download (Get-FileHash prints the same SHA256)
+          $sums = foreach ($f in $files) { "{0}  {1}" -f (Get-FileHash $f -Algorithm SHA256).Hash.ToLowerInvariant(), (Split-Path $f -Leaf) }
+          $sums | Set-Content -Encoding ascii artifacts\SHA256SUMS.txt
+          Get-Content artifacts\SHA256SUMS.txt
+
+      - name: Keep the dry-run files
+        if: github.ref_type != 'tag'
+        uses: actions/upload-artifact@v4
+        with:
+          name: downloads
+          path: |
+            artifacts/ClaudeUsageTraySetup-*.exe
+            artifacts/ClaudeUsageTray-*-portable.exe
+            artifacts/SHA256SUMS.txt
+
+      - if: github.ref_type == 'tag'
+        uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
+          fail_on_unmatched_files: true
+          body: |
+            ## Which file do I download?
+
+            | File | Choose it if |
+            |---|---|
+            | **`ClaudeUsageTraySetup-*.exe`** (recommended) | You want a normal install: Start menu, optional start with Windows, uninstall from Windows Settings. No administrator rights needed. |
+            | `ClaudeUsageTray-*-portable.exe` | You don't want to install anything: put it in a folder you keep and double-click it. |
+
+            Windows 10/11 64-bit. No .NET install needed.
+
+            **"Windows protected your PC"?** The files aren't code-signed, so SmartScreen may warn. Click **More info → Run anyway**. You can check a file with `Get-FileHash <file>` against `SHA256SUMS.txt`.
+
+            **ภาษาไทย:** ดาวน์โหลด `ClaudeUsageTraySetup-*.exe` (แนะนำ) แล้วเปิดเพื่อติดตั้ง ถ้าขึ้น "Windows protected your PC" ให้กด More info → Run anyway
           files: |
             artifacts/ClaudeUsageTraySetup-*.exe
             artifacts/ClaudeUsageTray-*-portable.exe
+            artifacts/SHA256SUMS.txt
