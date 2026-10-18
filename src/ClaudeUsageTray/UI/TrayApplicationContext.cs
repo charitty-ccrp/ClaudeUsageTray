@@ -53,15 +53,16 @@ internal sealed class TrayApplicationContext : ApplicationContext
     private readonly ToolStripMenuItem _overlayLockItem = new("Lock position (click-through)") { CheckOnClick = false };
     private readonly ToolStripMenuItem _overlayResetItem = new("Reset position");
 
-    // Claude Code OAuth mode: auto-open the CLI when the login has expired, so the user does not have to do it by hand.
-    // "claude update" is a maintenance subcommand that refreshes the token and exits by itself (the window closes on
-    // its own); plain "claude" opens the full interactive session, used only for the manual "Sign in..." menu item,
-    // in case the refresh token itself is gone and a real login is needed.
-    private readonly ClaudeCodeLauncher _claudeCodeAutoLauncher = new(arguments: "update");
+    // Claude Code OAuth mode: when the login has expired, run "claude auth status" hidden. Claude Code renews its own
+    // token on the way (no window, no prompt) and the credentials watcher picks up the new one. Plain "claude" opens
+    // the full interactive session, used only for the manual "Sign in..." menu item, in case the refresh token itself
+    // is gone and a real login is needed.
+    private readonly ClaudeCodeLauncher _claudeCodeAutoLauncher = new(arguments: "auth status", hidden: true);
     private readonly ClaudeCodeLauncher _claudeCodeSignInLauncher = new();
     private readonly ToolStripMenuItem _signInItem = new("Sign in to Claude Code...") { Visible = false };
     private readonly System.Windows.Forms.Timer _launchRecheckTimer = new() { Interval = (int)AppConstants.ClaudeCodeLaunchRecheckDelay.TotalMilliseconds };
-    private bool _claudeCodeLaunchAttempted;
+    private DateTimeOffset? _claudeCodeLastRenewal;
+    private bool _claudeCodeSignInHintShown;
 
     private AppConfig _config;
     private string? _sessionKey;
@@ -173,19 +174,35 @@ internal sealed class TrayApplicationContext : ApplicationContext
         MaybeAutoLaunchClaudeCode(state);
     }
 
-    /// <summary>Opens the Claude Code CLI once per failure episode when its login has expired; never more than one window.</summary>
+    /// <summary>
+    /// When Claude Code's login has expired, renews it silently in the background (at most every few minutes, never two
+    /// at once). Only if that does not help is the user told, once per failure episode, to sign in from the tray menu.
+    /// </summary>
     private void MaybeAutoLaunchClaudeCode(UsageState state)
     {
         if (state.Error == UsageErrorKind.None)
         {
-            _claudeCodeLaunchAttempted = false;
+            _claudeCodeLastRenewal = null;
+            _claudeCodeSignInHintShown = false;
             return;
         }
+        var now = DateTimeOffset.UtcNow;
         if (!ClaudeCodeRecoveryPolicy.ShouldAutoLaunch(_config.AuthMode, state.Error, _config.AutoLaunchClaudeCode,
-                _claudeCodeLaunchAttempted, _claudeCodeAutoLauncher.IsRunning))
+                _claudeCodeLastRenewal, now, _claudeCodeAutoLauncher.IsRunning))
+        {
+            // a renewal already ran for this failure and the login is still not back: a real sign-in is needed
+            if (_claudeCodeLastRenewal is not null && !_claudeCodeAutoLauncher.IsRunning && !_claudeCodeSignInHintShown &&
+                state.Error == UsageErrorKind.CredentialUnavailable)
+            {
+                _claudeCodeSignInHintShown = true;
+                _notifyIcon.ShowBalloonTip(10_000, "Claude Code sign-in needed",
+                    "Claude Code's login could not be renewed automatically. Use \"Sign in to Claude Code...\" from the tray menu.",
+                    ToolTipIcon.Warning);
+            }
             return;
+        }
 
-        _claudeCodeLaunchAttempted = true;
+        _claudeCodeLastRenewal = now;
         if (!_claudeCodeAutoLauncher.IsAvailable)
         {
             // nothing to run; the credentials watcher refreshes as soon as Claude Code or the Claude app renews the login
@@ -195,16 +212,13 @@ internal sealed class TrayApplicationContext : ApplicationContext
         var (started, error) = _claudeCodeAutoLauncher.Launch();
         if (started)
         {
-            Logger.Info("Ran 'claude update' so Claude Code can refresh its login; the window closes itself when done.");
+            Logger.Info("Claude Code login expired; renewing it in the background ('claude auth status', no window).");
             _launchRecheckTimer.Stop();
-            _launchRecheckTimer.Start(); // give the CLI a few seconds to refresh the token, then try again sooner than backoff would
-            _notifyIcon.ShowBalloonTip(10_000, "Claude Code sign-in needed",
-                "Refreshing Claude Code's login in the background. If it does not reconnect, use \"Sign in to Claude Code...\" " +
-                "from the tray menu.", ToolTipIcon.Info);
+            _launchRecheckTimer.Start(); // give the CLI a few seconds to renew the token, then try again sooner than backoff would
         }
         else
         {
-            Logger.Warn($"Could not auto-launch Claude Code: {error}"); // avoid spamming a balloon on every retry
+            Logger.Warn($"Could not run Claude Code to renew its login: {error}"); // avoid spamming a balloon on every retry
         }
     }
 

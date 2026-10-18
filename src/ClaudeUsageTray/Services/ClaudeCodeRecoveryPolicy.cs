@@ -3,17 +3,21 @@ using ClaudeUsageTray.Models;
 namespace ClaudeUsageTray.Services;
 
 /// <summary>
-/// Decides whether ClaudeUsageTray should open the Claude Code CLI for the user. Pure so it is easy to test; the
+/// Decides whether ClaudeUsageTray should run the Claude Code CLI to renew its login. Pure so it is easy to test; the
 /// actual process launch lives in ClaudeCodeLauncher.
 /// </summary>
 public static class ClaudeCodeRecoveryPolicy
 {
-    /// <param name="alreadyAttempted">True once a launch has already been tried for the current run of failures
-    /// (reset by the caller as soon as a refresh succeeds), so we do not reopen a new window every retry tick.</param>
-    public static bool ShouldAutoLaunch(AuthMode mode, UsageErrorKind error, bool autoLaunchEnabled, bool alreadyAttempted, bool processRunning) =>
+    /// <summary>The renewal runs hidden, so a failed one (e.g. offline) may be retried, but not on every retry tick.</summary>
+    public static readonly TimeSpan RetryInterval = TimeSpan.FromMinutes(10);
+
+    /// <param name="lastAttempt">When a renewal was last tried during the current run of failures (the caller clears it
+    /// as soon as a refresh succeeds); null if none yet.</param>
+    public static bool ShouldAutoLaunch(AuthMode mode, UsageErrorKind error, bool autoLaunchEnabled, DateTimeOffset? lastAttempt,
+        DateTimeOffset now, bool processRunning) =>
         mode == AuthMode.ClaudeCodeOAuth
         && error == UsageErrorKind.CredentialUnavailable
         && autoLaunchEnabled
-        && !alreadyAttempted
+        && (lastAttempt is not { } last || now - last >= RetryInterval)
         && !processRunning;
 }

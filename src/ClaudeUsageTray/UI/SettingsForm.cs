@@ -24,7 +24,7 @@ internal sealed class SettingsForm : Form
     {
         AutoSize = true,
         MaximumSize = new Size(ContentWidth, 0),
-        Text = "When Claude Code's login expires, refresh it automatically (runs \"claude update\" in a window that closes itself)",
+        Text = "When Claude Code's login expires, renew it automatically in the background (no window)",
     };
 
     private readonly CheckBox _localEstimate = new()

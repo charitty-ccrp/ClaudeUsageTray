@@ -34,9 +34,11 @@ public class ClaudeCodeRecoveryPolicyTests
         AuthMode mode = AuthMode.ClaudeCodeOAuth,
         UsageErrorKind error = UsageErrorKind.CredentialUnavailable,
         bool enabled = true,
-        bool alreadyAttempted = false,
+        DateTimeOffset? lastAttempt = null,
         bool processRunning = false) =>
-        ClaudeCodeRecoveryPolicy.ShouldAutoLaunch(mode, error, enabled, alreadyAttempted, processRunning);
+        ClaudeCodeRecoveryPolicy.ShouldAutoLaunch(mode, error, enabled, lastAttempt, Now, processRunning);
+
+    private static readonly DateTimeOffset Now = new(2026, 10, 18, 12, 0, 0, TimeSpan.Zero);
 
     [Fact]
     public void Launches_when_the_oauth_login_has_expired_and_nothing_else_is_in_the_way() =>
@@ -60,8 +62,11 @@ public class ClaudeCodeRecoveryPolicyTests
         Assert.False(Should(enabled: false));
 
     [Fact]
-    public void Does_not_reopen_a_window_it_already_tried_for_this_failure_episode() =>
-        Assert.False(Should(alreadyAttempted: true));
+    public void Does_not_retry_on_every_tick_but_tries_again_after_the_retry_interval()
+    {
+        Assert.False(Should(lastAttempt: Now.AddMinutes(-1)));
+        Assert.True(Should(lastAttempt: Now - ClaudeCodeRecoveryPolicy.RetryInterval));
+    }
 
     [Fact]
     public void Does_not_open_a_second_window_while_one_is_already_running() =>
@@ -81,6 +86,17 @@ public class ClaudeCodeLauncherTests
         Assert.False(launcher.IsRunning);
         Assert.False(launcher.IsAvailable);
         Assert.Equal(ClaudeCodeLauncher.NotInstalledMessage, error);
+    }
+
+    [Fact]
+    public void Hidden_mode_runs_without_a_window_and_finishes_on_its_own()
+    {
+        var ping = Path.Combine(Environment.SystemDirectory, "ping.exe");
+        using var launcher = new ClaudeCodeLauncher(arguments: "-n 2 127.0.0.1", workingDirectory: Path.GetTempPath(), resolve: () => ping, hidden: true);
+
+        Assert.True(launcher.Launch().Started);
+        Assert.True(launcher.IsRunning);
+        Assert.True(SpinWait.SpinUntil(() => !launcher.IsRunning, TimeSpan.FromSeconds(10)));
     }
 
     [Fact]

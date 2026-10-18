@@ -52,7 +52,7 @@ It pauses while the PC is locked. It waits for the network after sleep. If Claud
 
 | You see | Do this |
 |---|---|
-| "Claude Code login needed" | Open Claude Code or the Claude app once. The tray reconnects as soon as the login is renewed. |
+| "Claude Code login needed" | Usually nothing: the app renews Claude Code's login by itself in the background (it runs `claude auth status` with no window, and Claude Code renews its own token). If that fails, a notification says so: use **Sign in to Claude Code...** in the tray menu. |
 | "Checking too often" | Nothing to do: it waits as long as Claude asks. If it keeps happening, switch to **Saver** in Settings. |
 | "Access blocked" (cookie mode) | claude.ai showed a Cloudflare check. Switch to the Claude Code login if you can. |
 | Icon shows `!` | No data yet. Hover the icon or open the popup for the reason. |
