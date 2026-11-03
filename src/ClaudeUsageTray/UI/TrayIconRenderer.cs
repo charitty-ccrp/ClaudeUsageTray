@@ -38,11 +38,14 @@ internal sealed class TrayIconHandle : IDisposable
 
 internal static class TrayIconRenderer
 {
-    /// <summary>Below this size the number is unreadable, so only the ring is drawn (the number is in the tooltip).</summary>
-    public const int MinSizeForNumber = 20;
+    /// <summary>
+    /// Below this size (a 16px icon at 100% display scaling) the ring is thinned and the digits enlarged so the
+    /// number stays readable; it may overlap the ring slightly.
+    /// </summary>
+    public const int SmallTileBelow = 20;
 
     /// <summary>
-    /// Draws a ring that fills with the percentage, coloured by level, with the number inside when there is room.
+    /// Draws a ring that fills with the percentage, coloured by level, with the number inside.
     /// The fill amount shows the level without relying on colour. Caller must dispose the result after the
     /// NotifyIcon stops using it.
     /// </summary>
@@ -57,7 +60,9 @@ internal static class TrayIconRenderer
         percent is null ? "--" : percent.Value.ToString(System.Globalization.CultureInfo.InvariantCulture);
 
     /// <summary>Pixel height of the digits: they sit inside the ring, so "100" must fit its inner circle.</summary>
-    public static float FontPixels(int size, string text) => size * (text.Length switch { 1 => 0.52f, 2 => 0.44f, _ => 0.31f });
+    public static float FontPixels(int size, string text) => size < SmallTileBelow
+        ? size * (text.Length switch { 1 => 0.66f, 2 => 0.56f, _ => 0.40f })
+        : size * (text.Length switch { 1 => 0.52f, 2 => 0.44f, _ => 0.31f });
 
     /// <summary>
     /// Typographic format: no wrapping and no built-in side padding. The default StringFormat pads each side and wraps,
@@ -80,8 +85,7 @@ internal static class TrayIconRenderer
         g.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
         g.Clear(Color.Transparent);
 
-        var withNumber = size >= MinSizeForNumber;
-        var stroke = size * (withNumber ? 0.14f : 0.24f);
+        var stroke = size < SmallTileBelow ? Math.Max(1.5f, size * 0.11f) : size * 0.14f;
         var inset = stroke / 2 + 0.5f;
         var ring = new RectangleF(inset, inset, size - 2 * inset, size - 2 * inset);
 
@@ -99,14 +103,11 @@ internal static class TrayIconRenderer
             g.DrawArc(arc, ring, -90, 360f * Math.Clamp(p, 0, 100) / 100f);
         }
 
-        var text = percent is null ? "!" : withNumber ? TextFor(percent) : null;
-        if (text is not null)
-        {
-            using var font = new Font("Segoe UI", FontPixels(size, text), FontStyle.Bold, GraphicsUnit.Pixel);
-            using var brush = new SolidBrush(AppIcon.Ink);
-            using var format = CreateTextFormat();
+        var text = percent is null ? "!" : TextFor(percent);
+        using (var font = new Font("Segoe UI", FontPixels(size, text), FontStyle.Bold, GraphicsUnit.Pixel))
+        using (var brush = new SolidBrush(AppIcon.Ink))
+        using (var format = CreateTextFormat())
             g.DrawString(text, font, brush, new RectangleF(0, size * 0.03f, size, size), format);
-        }
 
         if (stale)
         {
