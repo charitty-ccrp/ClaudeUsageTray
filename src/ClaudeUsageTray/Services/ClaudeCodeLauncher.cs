@@ -10,8 +10,9 @@ namespace ClaudeUsageTray.Services;
 /// expired the CLI renews it with its own refresh token (and rewrites ~/.claude/.credentials.json) before printing
 /// the status, then exits within a second or two. It never prompts and never installs anything. The renewal is done
 /// by Claude Code itself, so this app still never touches the refresh token.</item>
-/// <item>visible, plain "claude", for the manual "Sign in..." menu item: the full interactive session, in case the
-/// refresh token itself is gone and the user needs to log in again. Any prompt there is answered by the user.</item>
+/// <item>visible, a PowerShell window running "claude auth login --claudeai", for the manual "Sign in..." menu item:
+/// the Claude subscription login (no chooser, no trust prompt), in case the refresh token itself is gone and the user
+/// needs to log in again. Any prompt there is answered by the user.</item>
 /// </list>
 /// </summary>
 public sealed class ClaudeCodeLauncher(string? arguments = null, string? workingDirectory = null, Func<string?>? resolve = null,
@@ -95,6 +96,16 @@ public sealed class ClaudeCodeLauncher(string? arguments = null, string? working
             return (false, $"Could not start '{path}'.");
         }
     }
+
+    /// <summary>PowerShell arguments that keep the window open and run the subscription login (single quotes doubled).</summary>
+    public static string PowerShellLoginArguments(string claudePath) =>
+        $"-NoExit -Command \"& '{claudePath.Replace("'", "''")}' auth login --claudeai\"";
+
+    /// <summary>The "Sign in..." launcher, built at click time so a freshly installed claude is found.</summary>
+    public static ClaudeCodeLauncher ForSignIn() => FindClaude() is { } claude
+        ? new ClaudeCodeLauncher(arguments: PowerShellLoginArguments(claude),
+            resolve: () => Path.Combine(Environment.SystemDirectory, "WindowsPowerShell", "v1.0", "powershell.exe"))
+        : new ClaudeCodeLauncher(resolve: () => null);
 
     public static string? FindClaude() => Resolve(
         Environment.GetEnvironmentVariable("PATH"),

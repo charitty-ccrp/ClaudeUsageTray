@@ -76,6 +76,15 @@ public class ClaudeCodeRecoveryPolicyTests
 public class ClaudeCodeLauncherTests
 {
     [Fact]
+    public void PowerShellLoginArguments_runs_the_subscription_login_and_doubles_single_quotes()
+    {
+        Assert.Equal("-NoExit -Command \"& 'C:\\a\\claude.exe' auth login --claudeai\"",
+            ClaudeCodeLauncher.PowerShellLoginArguments(@"C:\a\claude.exe"));
+        Assert.Equal("-NoExit -Command \"& 'C:\\Users\\O''Brien\\claude.exe' auth login --claudeai\"",
+            ClaudeCodeLauncher.PowerShellLoginArguments(@"C:\Users\O'Brien\claude.exe"));
+    }
+
+    [Fact]
     public void Reports_a_helpful_error_when_claude_is_not_installed()
     {
         using var launcher = new ClaudeCodeLauncher(resolve: () => null);
