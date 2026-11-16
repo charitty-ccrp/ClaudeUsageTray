@@ -54,11 +54,11 @@ internal sealed class TrayApplicationContext : ApplicationContext
     private readonly ToolStripMenuItem _overlayResetItem = new("Reset position");
 
     // Claude Code OAuth mode: when the login has expired, run "claude auth status" hidden. Claude Code renews its own
-    // token on the way (no window, no prompt) and the credentials watcher picks up the new one. Plain "claude" opens
-    // the full interactive session, used only for the manual "Sign in..." menu item, in case the refresh token itself
-    // is gone and a real login is needed.
+    // token on the way (no window, no prompt) and the credentials watcher picks up the new one. "claude auth login
+    // --claudeai" in a PowerShell window is used only for the manual "Sign in..." menu item, in case the refresh token
+    // itself is gone and a real login is needed.
     private readonly ClaudeCodeLauncher _claudeCodeAutoLauncher = new(arguments: "auth status", hidden: true);
-    private readonly ClaudeCodeLauncher _claudeCodeSignInLauncher = new();
+    private ClaudeCodeLauncher? _claudeCodeSignInLauncher;
     private readonly ToolStripMenuItem _signInItem = new("Sign in to Claude Code...") { Visible = false };
     private readonly System.Windows.Forms.Timer _launchRecheckTimer = new() { Interval = (int)AppConstants.ClaudeCodeLaunchRecheckDelay.TotalMilliseconds };
     private DateTimeOffset? _claudeCodeLastRenewal;
@@ -222,13 +222,20 @@ internal sealed class TrayApplicationContext : ApplicationContext
         }
     }
 
-    /// <summary>Manual fallback: a full interactive session, in case "claude update" alone cannot fix it (e.g. logged out).</summary>
+    /// <summary>Manual fallback: a PowerShell window running "claude auth login --claudeai", in case the automatic renewal cannot fix it (e.g. logged out).</summary>
     private void SignInToClaudeCode()
     {
+        if (_claudeCodeSignInLauncher?.IsRunning == true)
+        {
+            MessageBox.Show("Claude Code is already open.", "Claude Usage", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
+        _claudeCodeSignInLauncher?.Dispose();
+        _claudeCodeSignInLauncher = ClaudeCodeLauncher.ForSignIn();
         var (started, error) = _claudeCodeSignInLauncher.Launch();
         if (started)
         {
-            Logger.Info("Opened an interactive Claude Code session for the user to sign in.");
+            Logger.Info("Opened a PowerShell window running \"claude auth login --claudeai\" for the user to sign in.");
             _launchRecheckTimer.Stop();
             _launchRecheckTimer.Start();
         }
@@ -785,7 +792,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
         _launchRecheckTimer.Dispose();
         // disposing only stops tracking the process handle; it does not close a CLI window the user is still using
         _claudeCodeAutoLauncher.Dispose();
-        _claudeCodeSignInLauncher.Dispose();
+        _claudeCodeSignInLauncher?.Dispose();
         _service.StateChanged -= OnStateChanged;
         _service.RefreshingChanged -= OnRefreshingChanged;
         _service.Dispose();
